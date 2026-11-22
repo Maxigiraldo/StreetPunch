@@ -29,6 +29,13 @@ const FULL_TURN_DEG = 360;
 const OTHER_DISC_SATURATION = "70%";
 const OTHER_DISC_LIGHTNESS = "55%";
 
+// ---- Interpolación (P5c) ----
+const INTERP_DELAY_MS = 100;       // se dibuja ~100 ms en el pasado (docs/diseno.md, P5)
+const INTERVAL_FACTOR = 1.5;       // el retraso nunca baja de 1,5 intervalos entre estados:
+                                   // un espectador recibe cada 100 ms y necesita 2 estados que mezclar
+const INTERVAL_SMOOTHING = 0.1;    // peso de cada muestra al promediar el intervalo (media móvil)
+const MAX_SNAPSHOTS = 32;          // tope de estados guardados: acota la memoria si el navegador se detiene
+
 // Radios por defecto hasta que llegue el `welcome` con los reales.
 const DEFAULT_ARENA = { radius: 300, disc_radius: 24 };
 
@@ -53,6 +60,66 @@ const ctx = els.canvas.getContext("2d");
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
 const session = { socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null };
 
+// Estados recibidos con su hora de LLEGADA (performance.now), para dibujar en el pasado.
+// Se usa la hora de llegada y no el `tick` porque el cliente no conoce TICK_HZ.
+const timeline = { snapshots: [], interval: null };
+
+function resetTimeline() {
+  timeline.snapshots.length = 0;
+  timeline.interval = null;
+}
+
+function pushSnapshot(state) {
+  const now = performance.now();
+  const last = timeline.snapshots[timeline.snapshots.length - 1];
+  if (last) {
+    // Intervalo medio entre estados (media móvil): 33 ms para jugadores, 100 ms para espectadores.
+    const gap = now - last.t;
+    timeline.interval = timeline.interval === null
+      ? gap
+      : timeline.interval + INTERVAL_SMOOTHING * (gap - timeline.interval);
+  }
+  timeline.snapshots.push({ t: now, state });
+  if (timeline.snapshots.length > MAX_SNAPSHOTS) timeline.snapshots.shift();
+}
+
+// Al empezar una ronda (cuenta atrás) los discos aparecen en su punto de salida: no es un
+// movimiento, es un salto. Mezclar posiciones ahí los haría deslizarse por la arena.
+function startsNewRound(before, after) {
+  return after.phase === "countdown" && before.phase !== "countdown";
+}
+
+function lerp(from, to, alpha) {
+  return from + (to - from) * alpha;
+}
+
+function lerpDiscs(before, after, alpha) {
+  const previous = new Map(before.map((disc) => [disc[0], disc]));
+  return after.map((disc) => {
+    const old = previous.get(disc[0]);
+    if (!old) return disc; // disco que no estaba antes: se dibuja donde está
+    const [id, x, y, charge] = disc;
+    // `vivo` se toma del estado anterior: un disco sigue vivo en pantalla hasta el estado en que muere.
+    return [id, lerp(old[1], x, alpha), lerp(old[2], y, alpha), lerp(old[3], charge, alpha), old[4]];
+  });
+}
+
+// Discos tal como se ven en el instante `now`: ~100 ms antes de lo último recibido.
+function interpolatedDiscs(now) {
+  const snaps = timeline.snapshots;
+  if (snaps.length === 0) return [];
+  const delay = Math.max(INTERP_DELAY_MS, (timeline.interval ?? 0) * INTERVAL_FACTOR);
+  const renderTime = now - delay;
+  // Se descartan los estados ya superados, dejando el último anterior a renderTime.
+  while (snaps.length > 2 && snaps[1].t <= renderTime) snaps.shift();
+
+  const [before, after] = snaps;
+  if (!after || renderTime <= before.t) return before.state.d; // aún no hay historia suficiente
+  if (renderTime >= after.t) return after.state.d;             // no ha llegado nada más nuevo: se mantiene
+  if (startsNewRound(before.state, after.state)) return before.state.d;
+  return lerpDiscs(before.state.d, after.state.d, (renderTime - before.t) / (after.t - before.t));
+}
+
 // ---------------------------------------------------------------- mensajes
 
 // Registro {tipo: manejador}, igual que el codec del servidor: agregar un
@@ -68,6 +135,7 @@ const handlers = {
     // Solo importa el más reciente: cada `state` se basta a sí mismo
     // (docs/protocolo.md §4), así que descartar los intermedios no pierde nada.
     session.latest = msg;
+    pushSnapshot(msg);
     // El cambio de fase se detecta comparando con la anterior: no hay mensaje aparte.
     if (msg.phase !== session.phase) {
       session.phase = msg.phase;
@@ -98,6 +166,7 @@ function connect(name) {
   session.latest = null;
   session.phase = null;
   session.arena = DEFAULT_ARENA;
+  resetTimeline();
   resetControls();
   els.enter.disabled = true;
   // Sin esto el foco se queda en el campo de nombre y las teclas del juego se
@@ -309,7 +378,7 @@ function drawAim(px, py, worldX, worldY, r, charging) {
   ctx.restore();
 }
 
-function draw() {
+function draw(now) {
   const { width, height } = els.canvas;
   const cx = width / 2;
   const cy = height / 2;
@@ -326,7 +395,7 @@ function draw() {
   ctx.stroke();
 
   if (!session.latest) return;
-  for (const [id, x, y, charge, alive] of session.latest.d) {
+  for (const [id, x, y, charge, alive] of interpolatedDiscs(now)) {
     const px = cx + x * scale;
     const py = cy + y * scale;
     const r = discRadius * scale;
@@ -357,8 +426,8 @@ function draw() {
 // Se dibuja al ritmo de la pantalla, no al de los mensajes. El texto (DOM) solo
 // se reescribe cuando llega un tick nuevo: tocar el DOM 60 veces por segundo sobra.
 let lastHudTick = -1;
-function frame() {
-  draw();
+function frame(now) { // `now`: la hora del fotograma, en el mismo reloj que performance.now()
+  draw(now);
   const state = session.latest;
   if (state && state.tick !== lastHudTick) {
     lastHudTick = state.tick;
