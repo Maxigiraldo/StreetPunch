@@ -4,6 +4,7 @@ Ejecutar:  .venv/bin/python -m server.main
 """
 
 import asyncio
+import json
 import logging
 import pathlib
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from server.domain.world import ROLE_PLAYER, ROLE_SPECTATOR, World
 from server.metrics import Metrics
 
 WS_PATH = "/ws"
+METRICS_PATH = "/metrics"
 CLIENT_DIR = pathlib.Path(__file__).resolve().parent.parent / "client"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -76,7 +78,14 @@ def build(config: Config, static: dict[str, StaticFile]) -> App:
                     writer: asyncio.StreamWriter) -> ClientSession:
         return ClientSession(player_id, reader, writer, game, hello, play, encoder, config, metrics)
 
-    handshake = HttpHandshake(static, WS_PATH, config.MAX_HTTP_HEADER_BYTES, config.READ_CHUNK_BYTES)
+    def metrics_page() -> StaticFile:
+        # Solo lee contadores y estado (nada se modifica), así que puede
+        # llamarse desde el handshake sin romper la regla de único escritor.
+        body = {**metrics.snapshot(), "game": game.stats(), "config": {"tick_hz": config.TICK_HZ}}
+        return StaticFile(json.dumps(body, separators=(",", ":")).encode(), "application/json")
+
+    handshake = HttpHandshake(static, WS_PATH, config.MAX_HTTP_HEADER_BYTES, config.READ_CHUNK_BYTES,
+                              dynamic={METRICS_PATH: metrics_page})
     sock = create_listen_socket(config.HOST, config.PORT, config.LISTEN_BACKLOG)
     listener = Listener(sock, config, handshake, new_session, metrics)
     return App(listener, game, metrics)

@@ -20,6 +20,7 @@ Los límites numéricos que se citan aquí viven en `server/config.py`.
 | Situación | Respuesta |
 | --- | --- |
 | `GET /` o un archivo del cliente | 200, el archivo ya cargado en memoria, y se cierra la conexión |
+| `GET /metrics` | 200 con JSON de contadores y estado (solo lectura; lo consume `tools/monitor.py`). No es parte del juego: el cliente web no lo usa |
 | `GET /ws` válido (§4.2.1 del RFC) | 101 con `Sec-WebSocket-Accept = base64(SHA-1(clave + GUID))` |
 | Ruta que no está en la lista blanca | 404 |
 | Método distinto de `GET` | 405 |

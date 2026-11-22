@@ -186,6 +186,8 @@ class ClientSession(SnapshotObserver):
             for data in (pong, welcome, state):
                 if data is not None:
                     self._writer.write(data)
+                    self._metrics.bytes_sent += len(data)
+                    self._metrics.frames_sent += 1
             # drain espera solo si el búfer de envío pasó su marca alta: un
             # cliente lento frena a ESTE writer, nunca al tick ni a los demás.
             await self._writer.drain()

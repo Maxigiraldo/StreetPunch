@@ -15,6 +15,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 
@@ -134,12 +135,16 @@ async def read_head(reader: asyncio.StreamReader, max_bytes: int, chunk: int) ->
 
 class HttpHandshake:
     def __init__(self, static_files: dict[str, StaticFile], ws_path: str,
-                 max_header_bytes: int, read_chunk: int) -> None:
+                 max_header_bytes: int, read_chunk: int,
+                 dynamic: dict[str, Callable[[], StaticFile]] | None = None) -> None:
         # Solo se sirven las rutas de este diccionario, ya cargado en memoria
         # al arrancar: no hay E/S de disco en el event loop ni forma de pedir
         # "../../etc/passwd" (path traversal).
         self._static = static_files
         self._ws_path = ws_path
+        # Rutas cuyo contenido se calcula en cada petición (p. ej. /metrics).
+        # Son funciones sin await: no bloquean el event loop.
+        self._dynamic = dynamic or {}
         self._max_header_bytes = max_header_bytes
         self._read_chunk = read_chunk
 
@@ -150,7 +155,8 @@ class HttpHandshake:
             raise HttpError(HTTPStatus.METHOD_NOT_ALLOWED, {"Allow": "GET"})
         if req.path == self._ws_path:
             return self._upgrade(req), True
-        static = self._static.get(req.path)
+        make = self._dynamic.get(req.path)
+        static = make() if make is not None else self._static.get(req.path)
         if static is None:
             raise HttpError(HTTPStatus.NOT_FOUND)
         headers = {

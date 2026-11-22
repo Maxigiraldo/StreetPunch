@@ -79,6 +79,18 @@ class GameSession:
     def unsubscribe(self, player_id: int) -> None:
         self._observers.pop(player_id, None)
 
+    def stats(self) -> dict:
+        """Lectura para /metrics. Solo lee y no hay await: ve un estado
+        coherente (el tick no puede correr a la mitad)."""
+        playing = sum(1 for pid in self._observers if self.world.is_playing(pid))
+        return {
+            "tick": self._tick,
+            "phase": self._state.PHASE,
+            "subscribed": len(self._observers),
+            "playing": playing,
+            "spectators": len(self._observers) - playing,
+        }
+
     # ------------- el tick -------------
 
     def tick(self) -> None:
@@ -107,6 +119,7 @@ class GameSession:
                 self._metrics.inputs_dropped_rate += 1
                 continue
             command.execute(self.world)
+            self._metrics.inputs_applied += 1
 
     def _snapshot(self) -> Snapshot:
         cfg = self._cfg
