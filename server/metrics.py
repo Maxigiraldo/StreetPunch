@@ -21,14 +21,24 @@ class Metrics:
     inputs_dropped_rate: int = 0      # más de MAX_INPUTS_PER_CLIENT_PER_TICK
     mailbox_overwrites: int = 0       # estado reemplazado sin enviarse (cliente lento)
     tick_overruns: int = 0            # ticks que tardaron más que su presupuesto
+    handshake_timeouts: int = 0       # saludo HTTP o hello que no llegó a tiempo
+    idle_timeouts: int = 0            # clientes sin tráfico (ni pong) en IDLE_TIMEOUT_S
+    write_timeouts: int = 0           # clientes que no leen: drain() no terminó
     bytes_sent: int = 0               # bytes entregados al transporte (tramas completas)
     frames_sent: int = 0
     inputs_applied: int = 0           # entradas que el tick sí ejecutó
     started_at: float = field(default_factory=time.monotonic)
     tick_durations: deque[float] = field(init=False)
+    rtt_samples: deque[float] = field(init=False)   # ping -> pong de clientes reales
 
     def __post_init__(self) -> None:
         self.tick_durations = deque(maxlen=self.window)
+        # Los pings salen cada PING_INTERVAL_S por cliente: con 100 clientes
+        # son ~10/s, así que esta ventana cubre ~1 min. Misma cota de memoria.
+        self.rtt_samples = deque(maxlen=self.window)
+
+    def record_rtt(self, seconds: float) -> None:
+        self.rtt_samples.append(seconds)
 
     def record_tick(self, seconds: float) -> None:
         self.tick_durations.append(seconds)
@@ -40,6 +50,7 @@ class Metrics:
         y no en cada tick, para no gastar presupuesto del tick en estadística.
         """
         ticks = sorted(self.tick_durations)
+        rtts = sorted(self.rtt_samples)
         return {
             "uptime_s": round(time.monotonic() - self.started_at, 1),
             "connections_active": self.connections_active,
@@ -50,6 +61,9 @@ class Metrics:
             "inputs_dropped_rate": self.inputs_dropped_rate,
             "mailbox_overwrites": self.mailbox_overwrites,
             "tick_overruns": self.tick_overruns,
+            "handshake_timeouts": self.handshake_timeouts,
+            "idle_timeouts": self.idle_timeouts,
+            "write_timeouts": self.write_timeouts,
             "bytes_sent": self.bytes_sent,
             "frames_sent": self.frames_sent,
             "tick_ms": {
@@ -57,6 +71,12 @@ class Metrics:
                 "p50": _percentile_ms(ticks, 0.50),
                 "p99": _percentile_ms(ticks, 0.99),
                 "max": _percentile_ms(ticks, 1.0),
+            },
+            "rtt_ms": {
+                "samples": len(rtts),
+                "p50": _percentile_ms(rtts, 0.50),
+                "p99": _percentile_ms(rtts, 0.99),
+                "max": _percentile_ms(rtts, 1.0),
             },
         }
 

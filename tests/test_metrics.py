@@ -47,3 +47,19 @@ def test_ruta_dinamica_se_calcula_en_cada_peticion():
     second, _ = hs.respond(req)
     assert first.endswith(b'{"n":1}') and second.endswith(b'{"n":2}')
     assert b"application/json" in first
+
+
+def test_rtt_aparece_en_el_snapshot_y_la_ventana_es_acotada():
+    m = Metrics(3)
+    assert m.snapshot()["rtt_ms"]["p50"] is None
+    for s in (0.9, 0.010, 0.020, 0.030):    # la ventana es 3: el 0.9 sale
+        m.record_rtt(s)
+    rtt = m.snapshot()["rtt_ms"]
+    assert (rtt["samples"], rtt["p50"], rtt["max"]) == (3, 20.0, 30.0)
+
+
+def test_contadores_de_timeouts_en_el_snapshot():
+    m = Metrics(3)
+    m.handshake_timeouts, m.idle_timeouts, m.write_timeouts = 1, 2, 3
+    snap = m.snapshot()
+    assert (snap["handshake_timeouts"], snap["idle_timeouts"], snap["write_timeouts"]) == (1, 2, 3)

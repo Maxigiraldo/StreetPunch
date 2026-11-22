@@ -18,7 +18,9 @@ Esta es la "control_queue" del diseño, acotada a una casilla por tipo.
 """
 
 import asyncio
+import itertools
 import logging
+import struct
 
 from server.adapters.codec import JsonFrameEncoder, MessageCodec, MessageError
 from server.adapters.ws_frames import CloseCode, Frame, FrameReader, FrameWriter, Opcode, ProtocolError
@@ -45,6 +47,13 @@ class ClientSession(SnapshotObserver):
         self._cfg = config
         self._metrics = metrics
         self._frames = FrameReader(config.MAX_FRAME_BYTES)
+        loop = asyncio.get_running_loop()
+        self._loop = loop
+        # Plazo TOTAL para el hello; deja de existir al recibirlo.
+        self._hello_deadline: float | None = loop.time() + config.HANDSHAKE_TIMEOUT_S
+        # Ping pendiente de medir: (payload, instante en que se dejó en la casilla).
+        self._ping_ids = itertools.count(1)
+        self._ping_sent: tuple[bytes, float] | None = None
 
         # Etapa actual: antes de hello solo se acepta hello. Al entrar se
         # cambian codec y destino (un cambio de estado sin if/elif).
@@ -57,6 +66,7 @@ class ClientSession(SnapshotObserver):
         self._welcome: bytes | None = None
         self._roster: bytes | None = None
         self._pong: bytes | None = None
+        self._ping: bytes | None = None
         self._close_frames: bytes | None = None
 
         # Qué hacer con cada tipo de trama: registro, no if/elif.
@@ -76,6 +86,12 @@ class ClientSession(SnapshotObserver):
         self._mailbox = data
         self._event.set()
 
+    def request_shutdown(self) -> None:
+        """Pide cerrar con 1001 (el servidor se apaga). Sin await: solo deja
+        la trama close en la casilla; el writer la envía (sigue habiendo un
+        único escritor por socket). Lo llama el Listener desde otra tarea."""
+        self._request_close(CloseCode.GOING_AWAY)
+
     def on_welcome(self, data: bytes) -> None:
         self._welcome = data
         self._event.set()
@@ -93,6 +109,7 @@ class ClientSession(SnapshotObserver):
         salida al tick; el socket lo cierra quien creó la sesión (Listener)."""
         reader_task = asyncio.create_task(self._read_loop(leftover), name=f"reader-{self.player_id}")
         writer_task = asyncio.create_task(self._write_loop(), name=f"writer-{self.player_id}")
+        ping_task = asyncio.create_task(self._ping_loop(), name=f"ping-{self.player_id}")
         try:
             done, _ = await asyncio.wait({reader_task, writer_task},
                                          return_when=asyncio.FIRST_COMPLETED)
@@ -101,9 +118,9 @@ class ClientSession(SnapshotObserver):
                 # al writer un plazo para enviar la trama close.
                 await asyncio.wait({writer_task}, timeout=self._cfg.WRITE_TIMEOUT_S)
         finally:
-            for task in (reader_task, writer_task):
+            for task in (reader_task, writer_task, ping_task):
                 task.cancel()
-            for result in await asyncio.gather(reader_task, writer_task, return_exceptions=True):
+            for result in await asyncio.gather(reader_task, writer_task, ping_task, return_exceptions=True):
                 # Una excepción de este cliente se registra y no pasa de aquí
                 # (AGENTS.md §4.9). ConnectionError es la desconexión normal.
                 if isinstance(result, Exception) and not isinstance(result, ConnectionError):
@@ -123,16 +140,37 @@ class ClientSession(SnapshotObserver):
                 while (frame := self._frames.next_frame()) is not None:
                     if not self._handlers[frame.opcode](frame):
                         return
-                data = await self._reader.read(self._cfg.READ_CHUNK_BYTES)
+                data = await asyncio.wait_for(self._reader.read(self._cfg.READ_CHUNK_BYTES),
+                                              self._read_timeout())
                 if not data:        # EOF: el cliente cerró el TCP sin close
                     return
                 self._frames.feed(data)
+        except TimeoutError:
+            self._on_read_timeout()
         except ProtocolError as err:
             log.info("cliente %d: framing inválido (%s)", self.player_id, err.reason)
             self._request_close(err.close_code)
         except MessageError as err:
             log.info("cliente %d: mensaje inválido (%s)", self.player_id, err.code)
             self._request_close(err.close_code, self._encoder.encode_error(err.code))
+
+    def _read_timeout(self) -> float:
+        """Cuánto esperar el próximo dato. Antes del hello rige un plazo TOTAL
+        (cada byte que llegue NO lo renueva: sería la puerta de un slowloris).
+        Después, plazo de INACTIVIDAD: cualquier dato, incluido el pong a
+        nuestro ping, lo renueva."""
+        if self._hello_deadline is None:
+            return self._cfg.IDLE_TIMEOUT_S
+        return max(0.0, self._hello_deadline - self._loop.time())
+
+    def _on_read_timeout(self) -> None:
+        if self._hello_deadline is not None:
+            self._metrics.handshake_timeouts += 1
+            log.info("cliente %d: no mandó hello a tiempo", self.player_id)
+        else:
+            self._metrics.idle_timeouts += 1
+            log.info("cliente %d: sin tráfico en %.0f s", self.player_id, self._cfg.IDLE_TIMEOUT_S)
+        self._request_close(CloseCode.POLICY_VIOLATION, self._encoder.encode_error("timeout"))
 
     def _on_text(self, frame: Frame) -> bool:
         command = self._codec.decode(frame.payload, self.player_id)
@@ -141,6 +179,7 @@ class ClientSession(SnapshotObserver):
 
     def _deliver_hello(self, command: JoinCommand) -> None:
         # El codec de la etapa hello solo tiene la fábrica de JoinCommand.
+        self._hello_deadline = None     # ya saludó: desde aquí rige la inactividad
         self._game.submit_membership(Connect(command, self))
         self._codec = self._game_codec
         self._deliver = self._deliver_input
@@ -154,7 +193,13 @@ class ClientSession(SnapshotObserver):
         return True
 
     def _on_pong(self, frame: Frame) -> bool:
-        return True   # P6: medirá el RTT y renovará el plazo de inactividad
+        # Renovar la inactividad ya lo hizo el solo hecho de haber recibido
+        # datos. Aquí se mide el RTT; un pong con otro payload (no pedido, o
+        # de un ping anterior ya reemplazado) se ignora.
+        if self._ping_sent is not None and frame.payload == self._ping_sent[0]:
+            self._metrics.record_rtt(self._loop.time() - self._ping_sent[1])
+            self._ping_sent = None
+        return True
 
     def _on_close(self, frame: Frame) -> bool:
         # §5.5.1: al recibir close se responde close y se deja de leer.
@@ -166,6 +211,21 @@ class ClientSession(SnapshotObserver):
         # puede colarse entre ellos.
         self._close_frames = error_frame + FrameWriter.close(code)
         self._event.set()
+
+    # ---------------- ping periódico ----------------
+
+    async def _ping_loop(self) -> None:
+        """Cada PING_INTERVAL_S deja un ping en su casilla. NO escribe: solo
+        el writer toca el socket. Sirve para detectar clientes muertos (sin
+        pong, el reader vence por inactividad) y para medir el RTT."""
+        while True:
+            await asyncio.sleep(self._cfg.PING_INTERVAL_S)
+            if self._hello_deadline is not None:
+                continue   # aún sin hello: ya rige el plazo del saludo, no hace falta pingear
+            payload = struct.pack("!I", next(self._ping_ids) & 0xFFFFFFFF)
+            self._ping_sent = (payload, self._loop.time())
+            self._ping = FrameWriter.ping(payload)
+            self._event.set()
 
     # ---------------- writer ----------------
 
@@ -181,21 +241,38 @@ class ClientSession(SnapshotObserver):
             # Región crítica SIN await: tomar y vaciar las casillas. Nadie
             # puede intercalarse aquí, porque las otras tareas solo corren en
             # un await.
-            close, pong, welcome, roster, state = (
-                self._close_frames, self._pong, self._welcome, self._roster, self._mailbox)
-            self._pong = self._welcome = self._roster = self._mailbox = None
+            close, pong, ping, welcome, roster, state = (
+                self._close_frames, self._pong, self._ping, self._welcome, self._roster, self._mailbox)
+            self._pong = self._ping = self._welcome = self._roster = self._mailbox = None
 
             if close is not None:
                 self._writer.write(close)
-                await self._writer.drain()
+                await self._drain()
                 return
             # Prioridad: control, luego welcome (siempre antes del primer
             # estado), luego roster (quién es quién), luego estado. Cada trama ocupa UNA write().
-            for data in (pong, welcome, roster, state):
+            for data in (pong, ping, welcome, roster, state):
                 if data is not None:
                     self._writer.write(data)
                     self._metrics.bytes_sent += len(data)
                     self._metrics.frames_sent += 1
             # drain espera solo si el búfer de envío pasó su marca alta: un
             # cliente lento frena a ESTE writer, nunca al tick ni a los demás.
-            await self._writer.drain()
+            if not await self._drain():
+                return
+
+    async def _drain(self) -> bool:
+        """drain con plazo. False = el cliente no lee (zombi): se aborta.
+
+        Sin plazo, un cliente que deja de leer dejaría a su writer esperando
+        para siempre, con su descriptor y su cupo retenidos. abort() descarta
+        lo que quedaba en el búfer y cierra ya: no hay a quién entregárselo."""
+        try:
+            await asyncio.wait_for(self._writer.drain(), self._cfg.WRITE_TIMEOUT_S)
+            return True
+        except TimeoutError:
+            self._metrics.write_timeouts += 1
+            log.info("cliente %d: no lee desde hace %.0f s; se aborta", self.player_id,
+                     self._cfg.WRITE_TIMEOUT_S)
+            self._writer.transport.abort()
+            return False

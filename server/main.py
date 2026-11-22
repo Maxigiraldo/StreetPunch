@@ -7,11 +7,13 @@ import asyncio
 import json
 import logging
 import pathlib
+import signal
 from dataclasses import dataclass
 
 from server.adapters.client_session import ClientSession
 from server.adapters.codec import JsonFrameEncoder, game_codec, hello_codec
 from server.adapters.http_handshake import HttpHandshake, StaticFile
+from server.adapters.ws_frames import CloseCode, FrameWriter
 from server.adapters.listener import Listener, create_listen_socket
 from server.application.game_session import GameSession
 from server.application.send_policies import EveryNthTick, EveryTick
@@ -59,6 +61,11 @@ class App:
         finally:
             tick.cancel()
 
+    async def shutdown(self) -> None:
+        """Apagado ordenado. El tick sigue corriendo mientras los clientes se
+        van (él ejecuta sus Disconnect); run() lo cancela al terminar serve()."""
+        await self.listener.shutdown()
+
 
 def build(config: Config, static: dict[str, StaticFile]) -> App:
     """Arma el grafo de objetos (inversión de dependencias): cada clase recibe
@@ -87,18 +94,36 @@ def build(config: Config, static: dict[str, StaticFile]) -> App:
     handshake = HttpHandshake(static, WS_PATH, config.MAX_HTTP_HEADER_BYTES, config.READ_CHUNK_BYTES,
                               dynamic={METRICS_PATH: metrics_page})
     sock = create_listen_socket(config.HOST, config.PORT, config.LISTEN_BACKLOG)
-    listener = Listener(sock, config, handshake, new_session, metrics)
+    full_reply = encoder.encode_error("full") + FrameWriter.close(CloseCode.TRY_AGAIN_LATER)
+    listener = Listener(sock, config, handshake, new_session, metrics, full_reply)
     return App(listener, game, metrics)
+
+
+async def serve_until_signal(app: App) -> None:
+    """Corre el servidor hasta SIGINT (Ctrl+C) o SIGTERM (kill, systemd,
+    Railway) y entonces lo apaga en orden: close 1001 a cada cliente, plazo
+    de gracia y cierre. Un handler de señal no puede hacer await: solo marca
+    un Event y la corrutina principal hace el trabajo."""
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    running = asyncio.create_task(app.run(), name="server")
+    stopper = asyncio.create_task(stop.wait(), name="stop-signal")
+    try:
+        await asyncio.wait({running, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        if stop.is_set():
+            logging.getLogger(__name__).info("señal recibida: apagando")
+            await app.shutdown()
+        await running          # propaga un fallo real del servidor, si lo hubo
+    finally:
+        stopper.cancel()
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = Config()
-    try:
-        # P6 reemplaza esto por SIGTERM/SIGINT con cierre ordenado (close 1001).
-        asyncio.run(build(config, load_static(CLIENT_DIR)).run())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(serve_until_signal(build(config, load_static(CLIENT_DIR))))
 
 
 if __name__ == "__main__":

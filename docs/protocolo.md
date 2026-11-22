@@ -45,9 +45,9 @@ Si en el mismo `read()` llegan bytes después de la cabecera (la primera trama),
 ```
 cliente                                servidor
   | --- TCP connect ----------------------> |  accept + cupo del semáforo
-  | --- GET /ws (Upgrade) ----------------> |  timeout de saludo: 5 s
+  | --- GET /ws (Upgrade) ----------------> |  plazo del saludo HTTP: 5 s
   | <-- 101 Switching Protocols ----------- |
-  | --- {"t":"hello","name":"Ana"} -------> |  JoinCommand -> cola de entradas
+  | --- {"t":"hello","name":"Ana"} -------> |  plazo del hello: 5 s más; JoinCommand -> cola de membresía
   | <-- {"t":"welcome",...} --------------- |  lo genera el tick (único escritor)
   | <-- {"t":"roster",...} ---------------- |  quién es quién; se repite cuando alguien entra o sale
   | <-- {"t":"state",...} x 30 Hz -------- |  10 Hz si es espectador
@@ -130,7 +130,8 @@ Lista **completa** de todos los conectados que ya hicieron `hello` (jugadores y 
 | `bad_name` | Nombre vacío, demasiado largo o que no es string | 1008 |
 | `bad_message` | JSON inválido, `t` desconocido o campos fuera de rango | 1008 |
 | `not_hello` | Primer mensaje distinto de `hello`, o un segundo `hello` | 1008 |
-| `full` | Se alcanzó `MAX_CONNECTIONS` | 1013 |
+| `full` | Se alcanzó `MAX_CONNECTIONS`. El servidor contesta el saludo con normalidad (101) y entonces manda este error. Las páginas HTTP se siguen sirviendo | 1013 |
+| `timeout` | No llegó el `hello` en `HANDSHAKE_TIMEOUT_S` (5 s, plazo total), o no hubo ningún tráfico (ni el `pong` a nuestro ping) en `IDLE_TIMEOUT_S` (30 s) | 1008 |
 
 ## 5. Códigos de cierre
 
@@ -145,6 +146,12 @@ Lista **completa** de todos los conectados que ya hicieron `hello` (jugadores y 
 | 1009 | Trama mayor que `MAX_FRAME_BYTES` |
 | 1013 | Servidor lleno |
 
-## 6. Latencia
+## 6. Latencia, ping/pong y plazos
 
-No hay número de secuencia en `input`: `state` es un único `bytes` compartido por todos, así que no puede devolverle a cada cliente "tu último `seq`". La latencia se mide con el RTT de ping/pong del propio WebSocket (P6/P7).
+No hay número de secuencia en `input`: `state` es un único `bytes` compartido por todos, así que no puede devolverle a cada cliente "tu último `seq`". La latencia se mide con el RTT del ping/pong del propio WebSocket:
+
+- Tras el `hello`, el servidor manda un **ping cada `PING_INTERVAL_S` (10 s)** a cada cliente, con un número de 4 bytes como payload. Los navegadores contestan `pong` solos (RFC 6455 §5.5.3); el cliente web no hace nada.
+- El tiempo ping → pong se guarda en las métricas (`rtt_ms` en `/metrics`, columnas `rtt` de `tools/monitor.py`).
+- **Inactividad:** cualquier dato recibido, incluido el `pong`, renueva el plazo de `IDLE_TIMEOUT_S` (30 s). Un cliente que no responde a 3 pings seguidos recibe `error timeout` y se cierra con 1008. Así se detecta un cliente muerto que TCP tardaría horas en notar.
+- **Escritura:** si el servidor no logra entregar sus bytes en `WRITE_TIMEOUT_S` (10 s) porque el cliente no lee, se corta la conexión sin más aviso (no hay a quién avisarle).
+- **Apagado:** con SIGTERM o SIGINT el servidor deja de aceptar, manda `close 1001` a todos y espera `SHUTDOWN_GRACE_S` (2 s) antes de cortar a los que no cooperan.

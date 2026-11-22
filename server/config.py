@@ -38,6 +38,12 @@ class Config:
     # ancho de banda sigan acotados.
     MAX_CONNECTIONS: int = 100
 
+    # Con el servidor lleno aún se contesta el saludo para decir "full" (1013),
+    # pero cada contestación ocupa un descriptor hasta HANDSHAKE_TIMEOUT_S. Sin
+    # tope, una avalancha de conexiones podría gastar todos los descriptores
+    # solo en rechazar. Pasado este número, se cierra directo sin explicar.
+    MAX_REJECTING_HANDSHAKES: int = 16
+
     # Tamaño máximo de una trama WebSocket. Los mensajes del juego pesan
     # ~50-300 B. Se revisa ANTES de reservar memoria: si no, un cliente que
     # anuncie 2^63 bytes nos haría intentar reservar exabytes.
@@ -108,7 +114,10 @@ class Config:
     # ------------------------------------------------------------------
 
     # Un navegador completa el saludo HTTP y envía "hello" en milisegundos.
-    # Tardar más de 5 s indica un ataque slowloris o un cliente roto.
+    # Tardar más de 5 s indica un ataque slowloris o un cliente roto. El plazo
+    # se aplica dos veces: 5 s para el saludo HTTP y 5 s más para el hello.
+    # Es un plazo TOTAL (no se renueva con cada byte), para que mandar un byte
+    # cada 4 s no mantenga la conexión viva para siempre.
     HANDSHAKE_TIMEOUT_S: float = 5.0
 
     # TCP puede tardar horas en notar que el otro extremo murió (keepalive
