@@ -58,7 +58,8 @@ const PHASE_TEXT = {
   playing: "¡A pelear!",
   round_over: "Fin de la ronda",
 };
-const STATUS_TEXT = { playing: "en juego", eliminated: "eliminado", spectator: "espectador" };
+const STATUS_TEXT = { playing: "en juego", eliminated: "eliminado", spectator: "espectador",
+                      host: "anfitrión", inroom: "en la sala" };
 
 const els = {
   form: document.getElementById("join"),
@@ -67,6 +68,7 @@ const els = {
   status: document.getElementById("status"),
   hud: document.getElementById("hud"),
   scores: document.getElementById("scores"),
+  start: document.getElementById("start"),
   canvas: document.getElementById("arena"),
 };
 const ctx = els.canvas.getContext("2d");
@@ -76,6 +78,7 @@ const session = {
   socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null,
   maxPlayers: null,    // jugadores por ronda (del welcome): para calcular en qué turno entra un espectador
   cooldownS: 0,        // enfriamiento de la embestida (del welcome)
+  host: null,          // id del anfitrión de la sala (el primero en llegar)
   roster: new Map(),   // id -> { name, color }, tal como lo manda el servidor
 };
 
@@ -150,10 +153,13 @@ const handlers = {
     session.arena = msg.arena;
     session.maxPlayers = msg.max_players;
     session.cooldownS = msg.dash_cooldown_s;
+    session.minCharge = msg.min_charge;     // fracción de carga bajo la cual soltar no embiste
+    session.minPlayers = msg.min_players;
     setStatus(`Conectado como #${msg.id}`);
   },
   roster(msg) {
     // Siempre llega la lista completa: se reemplaza entera, no se mezcla.
+    session.host = msg.host;
     session.roster = new Map(msg.players.map((p) => [p.id, { name: p.name, color: p.color }]));
   },
   state(msg) {
@@ -213,6 +219,8 @@ function connect(name) {
     // 1008 = el servidor rechazó algo (el `error` previo dice qué); se conserva ese texto.
     if (event.code !== 1008) setStatus(`Desconectado (código ${event.code})`);
     session.socket = null;
+    session.host = null;
+    els.start.hidden = true;
     resetControls();
     els.enter.disabled = false;
   });
@@ -284,7 +292,7 @@ function setCharging(on) {
   controls.charging = on;
   // Soltar con carga acumulada lanza la embestida y empieza el enfriamiento en el servidor:
   // el cliente lo refleja (aproximado) para que el jugador VEA por qué no puede cargar.
-  if (!on && ownCharge() > 0) controls.cooldownUntil = performance.now() + session.cooldownS * MS_PER_S_FLOAT;
+  if (!on && ownCharge() >= (session.minCharge ?? 0) && ownCharge() > 0) controls.cooldownUntil = performance.now() + session.cooldownS * MS_PER_S_FLOAT;
   send({ t: "charge", on });
 }
 
@@ -356,6 +364,11 @@ window.addEventListener("blur", () => {
   setCharging(false);
 });
 
+els.start.addEventListener("click", () => {
+  send({ t: "start" });
+  els.start.blur();   // que Espacio no vuelva a «pulsar» el botón en plena ronda
+});
+
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = els.name.value.trim();
@@ -393,11 +406,18 @@ function describe(state) {
 // Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño].
 // Registro por fase (como `handlers`): una fase nueva es una entrada nueva.
 const overlayFor = {
-  // Con el mínimo reunido el servidor abre una sala de espera y manda cuánto falta (`ms`);
-  // sin él, `ms` es null y solo se espera a que lleguen rivales.
-  waiting: (state) => state.ms === null
-    ? ["Esperando jugadores…", "Se empieza cuando haya rivales"]
-    : [String(Math.ceil(state.ms / MS_PER_S)), `La ronda empieza pronto: ${Math.min(session.roster.size, session.maxPlayers ?? Infinity)} jugadores listos`],
+  // Sala de espera: la ronda no arranca sola, la inicia el anfitrión (el primero en llegar)
+  // cuando ve en la lista que ya están todos.
+  waiting: () => {
+    const count = session.roster.size;
+    const enough = count >= (session.minPlayers ?? 2);
+    if (isHost()) {
+      return enough
+        ? ["Sala de espera", `${count} en la sala: pulsa «Iniciar partida» cuando estén todos`]
+        : ["Sala de espera", `Eres el anfitrión. Faltan jugadores (mínimo ${session.minPlayers})`];
+    }
+    return ["Sala de espera", `${nameOf(session.host)} iniciará la partida (${count} en la sala)`];
+  },
   countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!"],
   round_over: (state) => {
     if (state.winner === null) return ["Empate", "Nadie ganó la ronda"];
@@ -409,6 +429,16 @@ const overlayFor = {
 
 // Filas del marcador: todos los del roster, con sus victorias y su estado en esta ronda.
 // Más victorias primero; a igualdad, el orden del roster (el de llegada).
+function isHost() {
+  return session.me !== null && session.me === session.host;
+}
+
+// El botón solo existe para el anfitrión y solo mientras se espera: el servidor ignora
+// la orden de cualquier otro, así que esto es comodidad, no seguridad.
+function syncStartButton(state) {
+  els.start.hidden = !(isHost() && state.phase === "waiting");
+}
+
 function scoreRows(state) {
   const inRound = new Map(state.d.map((disc) => [disc[0], disc[4]]));
   const rows = [...session.roster].map(([id, info]) => ({
@@ -416,7 +446,8 @@ function scoreRows(state) {
     name: info.name,
     color: info.color,
     wins: state.scores[id] ?? 0,
-    status: !inRound.has(id) ? "spectator" : inRound.get(id) ? "playing" : "eliminated",
+    status: state.phase === "waiting" ? (id === session.host ? "host" : "inroom")
+      : !inRound.has(id) ? "spectator" : inRound.get(id) ? "playing" : "eliminated",
     me: id === session.me,
   }));
   return rows.sort((a, b) => b.wins - a.wins);
@@ -596,6 +627,7 @@ function frame(now) { // `now`: la hora del fotograma, en el mismo reloj que per
     lastHudTick = state.tick;
     els.hud.textContent = describe(state);
     renderScores(state);
+    syncStartButton(state);
   }
   requestAnimationFrame(frame);
 }

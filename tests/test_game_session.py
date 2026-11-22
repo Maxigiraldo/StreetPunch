@@ -13,7 +13,7 @@ from server.application.send_policies import EveryNthTick, EveryTick
 from server.application.session_commands import Connect, Disconnect
 from server.config import Config
 from server.domain.arena import Arena
-from server.domain.commands import JoinCommand, MoveCommand
+from server.domain.commands import JoinCommand, MoveCommand, StartCommand
 from server.domain.physics import Physics
 from server.domain.round_states import RoundContext, Waiting
 from server.domain.world import ROLE_PLAYER, ROLE_SPECTATOR, World
@@ -31,8 +31,8 @@ class FakeEncoder(SnapshotEncoder):
     def encode_welcome(self, welcome: WelcomeInfo) -> bytes:
         return f"welcome:{welcome.id}".encode()
 
-    def encode_roster(self, entries) -> bytes:
-        return ("roster:" + ",".join(f"{e.id}={e.name}" for e in entries)).encode()
+    def encode_roster(self, entries, host) -> bytes:
+        return (f"roster:host={host}:" + ",".join(f"{e.id}={e.name}" for e in entries)).encode()
 
 
 class FakeObserver(SnapshotObserver):
@@ -66,7 +66,7 @@ def make(config: Config = Config()) -> tuple[GameSession, FakeEncoder, Metrics]:
     encoder = FakeEncoder()
     policies = {ROLE_PLAYER: EveryTick(), ROLE_SPECTATOR: EveryNthTick(config.SPECTATOR_EVERY_N_TICKS)}
     game = GameSession(config, World(config, Arena(config.ARENA_RADIUS)),
-                       Waiting(RoundContext(config, Physics(config)), lobby=False), encoder, policies, metrics)
+                       Waiting(RoundContext(config, Physics(config))), encoder, policies, metrics)
     return game, encoder, metrics
 
 
@@ -74,6 +74,11 @@ def connect(game: GameSession, player_id: int, observer: SnapshotObserver | None
     observer = observer or FakeObserver()
     game.submit_membership(Connect(JoinCommand(player_id, f"p{player_id}"), observer))
     return observer
+
+
+def start(game: GameSession, host_id: int = 1) -> None:
+    """El anfitrión pulsa "Iniciar": llega como una entrada más y el tick la aplica."""
+    game.submit_input(host_id, StartCommand(host_id))
 
 
 def test_welcome_llega_antes_que_el_primer_estado():
@@ -88,6 +93,7 @@ def test_welcome_llega_antes_que_el_primer_estado():
 def test_estado_se_codifica_una_vez_y_es_el_mismo_objeto_para_todos():
     game, encoder, _ = make()
     observers = [connect(game, i) for i in (1, 2, 3)]
+    start(game)
     game.tick()   # entran y empieza la cuenta: los tres son jugadores
     game.tick()
     assert encoder.state_calls == 2
@@ -99,6 +105,7 @@ def test_espectador_a_10hz_y_jugador_a_30hz():
     cfg = Config()
     game, _, _ = make(cfg)
     a, b = connect(game, 1), connect(game, 2)
+    start(game)
     game.tick()                                  # la ronda empieza: 1 y 2 juegan
     c = connect(game, 3)                         # llega tarde: espectador
     before = {id(o): len(o.received) for o in (a, b, c)}
@@ -115,6 +122,7 @@ def test_maximo_de_entradas_por_cliente_por_tick():
     game, _, metrics = make(cfg)
     connect(game, 1)
     connect(game, 2)
+    start(game)
     game.tick()
     for _ in range(cfg.MAX_INPUTS_PER_CLIENT_PER_TICK + 3):
         game.submit_input(1, MoveCommand(1, 1, 0))
@@ -158,6 +166,7 @@ def test_observador_roto_no_detiene_a_los_demas():
     game, _, _ = make()
     connect(game, 1, BrokenObserver())
     good = connect(game, 2)
+    start(game)          # con ronda en marcha ambos juegan: el estado llega en cada tick
     for _ in range(5):
         game.tick()
     assert len(good.received) >= 5
@@ -171,8 +180,8 @@ def test_roster_llega_a_todos_cuando_entra_alguien_incluido_el_nuevo():
     game.tick()
     b = connect(game, 2)
     game.tick()
-    assert a.rosters == [b"roster:1=p1", b"roster:1=p1,2=p2"]
-    assert b.rosters == [b"roster:1=p1,2=p2"]     # el nuevo recibe la lista completa
+    assert a.rosters == [b"roster:host=1:1=p1", b"roster:host=1:1=p1,2=p2"]
+    assert b.rosters == [b"roster:host=1:1=p1,2=p2"]     # el nuevo recibe la lista completa
 
 
 def test_roster_no_se_repite_si_nadie_entra_ni_sale():
@@ -186,10 +195,11 @@ def test_roster_no_se_repite_si_nadie_entra_ni_sale():
 def test_roster_llega_tambien_a_espectadores_a_pesar_de_su_politica_10hz():
     game, _, _ = make()
     connect(game, 1), connect(game, 2)
+    start(game)
     game.tick()                       # empieza la ronda: 1 y 2 juegan
     spectator = connect(game, 3)
     game.tick()                       # puede no tocarle estado en este tick; el roster sí
-    assert spectator.rosters == [b"roster:3=p3,1=p1,2=p2"]   # el que nunca jugó, primero en la cola
+    assert spectator.rosters == [b"roster:host=1:3=p3,1=p1,2=p2"]   # el que nunca jugó, primero en la cola
 
 
 def test_roster_al_salir_alguien_ya_no_lo_incluye():
@@ -198,7 +208,7 @@ def test_roster_al_salir_alguien_ya_no_lo_incluye():
     game.tick()
     game.submit_membership(Disconnect(2))
     game.tick()
-    assert a.rosters[-1] == b"roster:1=p1"
+    assert a.rosters[-1] == b"roster:host=1:1=p1"
 
 
 def test_roster_sale_con_el_orden_de_la_cola_ya_rotado_y_no_se_repite():
@@ -206,8 +216,31 @@ def test_roster_sale_con_el_orden_de_la_cola_ya_rotado_y_no_se_repite():
     cfg = Config(MAX_ACTIVE_PLAYERS=2)
     game, _, _ = make(cfg)
     obs = [connect(game, i) for i in (1, 2, 3)]
+    start(game)
     game.tick()                       # entran 1, 2 y 3; la ronda toma a 1 y 2 y los manda al final
-    assert obs[2].rosters == [b"roster:3=p3,1=p1,2=p2"]   # un solo mensaje, con el orden final
+    assert obs[2].rosters == [b"roster:host=1:3=p3,1=p1,2=p2"]   # un solo mensaje, con el orden final
     for _ in range(5):
         game.tick()
     assert len(obs[2].rosters) == 1   # sin cambios de orden no se repite
+
+
+def test_roster_se_reenvia_cuando_cambia_el_anfitrion():
+    """Si el anfitrión se va, la lista de los demás cambia de todos modos, pero
+    el cambio de anfitrión también debe llegar aunque el orden se mantuviera."""
+    game, _, _ = make()
+    connect(game, 1), connect(game, 2), connect(game, 3)
+    game.tick()
+    obs = connect(game, 4)
+    game.tick()
+    game.submit_membership(Disconnect(1))
+    game.tick()
+    assert obs.rosters[-1] == b"roster:host=2:2=p2,3=p3,4=p4"
+
+
+def test_un_no_anfitrion_no_puede_iniciar():
+    game, _, _ = make()
+    connect(game, 1), connect(game, 2)
+    start(game, host_id=2)
+    for _ in range(3):
+        game.tick()
+    assert game.stats()["phase"] == "waiting"

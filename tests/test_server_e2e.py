@@ -37,9 +37,10 @@ def test_dos_jugadores_reciben_estados_a_30hz():
         async with running_server() as app:
             a, b = await WsClient.connect(app.listener.port), await WsClient.connect(app.listener.port)
             a.send_json({"t": "hello", "name": "Ana"})
-            b.send_json({"t": "hello", "name": "Beto"})
-            welcome = await a.recv_json()
+            welcome = await a.recv_json()      # Ana entra primero: es la anfitriona
             assert welcome["t"] == "welcome" and welcome["color"].startswith("#")
+            b.send_json({"t": "hello", "name": "Beto"})
+            a.send_json({"t": "start"})
 
             # Contar durante 1 s una vez que la ronda empezó (los dos juegan).
             loop = asyncio.get_running_loop()
@@ -61,8 +62,9 @@ def test_input_mueve_el_disco_en_el_servidor():
         async with running_server() as app:
             a, b = await WsClient.connect(app.listener.port), await WsClient.connect(app.listener.port)
             a.send_json({"t": "hello", "name": "Ana"})
-            b.send_json({"t": "hello", "name": "Beto"})
             my_id = (await a.recv_json())["id"]
+            b.send_json({"t": "hello", "name": "Beto"})
+            a.send_json({"t": "start"})
             while (await a.recv_state())["phase"] != "playing":
                 pass
             start = app.game.world.disc(my_id).pos

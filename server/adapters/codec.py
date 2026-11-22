@@ -19,7 +19,7 @@ from collections.abc import Callable
 from server.adapters.ws_frames import CloseCode, FrameWriter
 from server.application.ports import RosterEntry, Snapshot, SnapshotEncoder, WelcomeInfo
 from server.config import Config
-from server.domain.commands import ChargeCommand, Command, JoinCommand, MoveCommand
+from server.domain.commands import ChargeCommand, Command, JoinCommand, MoveCommand, StartCommand
 
 _AXIS_VALUES = (-1, 0, 1)
 _COMPACT = (",", ":")   # JSON sin espacios: menos bytes por tick
@@ -100,6 +100,10 @@ def _charge(msg: dict, player_id: int) -> Command:
     return ChargeCommand(player_id, on)
 
 
+def _start(msg: dict, player_id: int) -> Command:
+    return StartCommand(player_id)
+
+
 def _second_hello(msg: dict, player_id: int) -> Command:
     raise MessageError("not_hello")
 
@@ -112,6 +116,7 @@ def game_codec() -> MessageCodec:
     return MessageCodec({
         "input": _input,
         "charge": _charge,
+        "start": _start,
         "hello": _second_hello,
     }, unknown_code="bad_message")
 
@@ -148,10 +153,11 @@ class JsonFrameEncoder(SnapshotEncoder):
             "t": "welcome", "id": w.id, "color": w.color, "role": w.role,
             "arena": {"radius": w.arena_radius, "disc_radius": w.disc_radius},
             "max_players": w.max_players, "dash_cooldown_s": w.dash_cooldown_s,
+            "min_charge": w.min_charge, "min_players": w.min_players,
         })
 
-    def encode_roster(self, entries: tuple[RosterEntry, ...]) -> bytes:
-        return self._frame({"t": "roster", "players": [
+    def encode_roster(self, entries: tuple[RosterEntry, ...], host: int | None) -> bytes:
+        return self._frame({"t": "roster", "host": host, "players": [
             {"id": e.id, "name": e.name, "color": e.color} for e in entries]})
 
     def encode_error(self, code: str) -> bytes:

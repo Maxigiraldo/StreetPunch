@@ -46,7 +46,7 @@ class GameSession:
         # Ids (en orden de cola) del último roster enviado. El orden también
         # cuenta: cada ronda manda a quienes jugaron al final de la cola, y el
         # cliente deduce de ese orden en qué turno le toca.
-        self._last_roster_ids: tuple[int, ...] = ()
+        self._last_roster: tuple[tuple[int, ...], int | None] = ((), None)
 
         # Cola productor-consumidor: N readers producen y el tick consume.
         # Acotada: si un cliente inunda, la memoria no crece; se descarta.
@@ -76,7 +76,9 @@ class GameSession:
         player = self.world.players[player_id]
         welcome = WelcomeInfo(player.id, player.color, self.world.role_of(player_id),
                               self._cfg.ARENA_RADIUS, self._cfg.DISC_RADIUS,
-                              self._cfg.MAX_ACTIVE_PLAYERS, self._cfg.DASH_COOLDOWN_S)
+                              self._cfg.MAX_ACTIVE_PLAYERS, self._cfg.DASH_COOLDOWN_S,
+                              self._cfg.MIN_CHARGE_S / self._cfg.CHARGE_MAX_S,
+                              self._cfg.MIN_PLAYERS_TO_START)
         # Se publica en el MISMO tick en que se suscribe, antes del estado de
         # este tick: el writer del cliente siempre ve el welcome primero.
         self._notify(observer, observer.on_welcome, self._encoder.encode_welcome(welcome))
@@ -107,7 +109,7 @@ class GameSession:
         self._publish()
 
     def _publish_roster_if_changed(self) -> None:
-        """El roster (id, nombre y color de TODOS, en orden de cola) solo se
+        """El roster (id, nombre y color de TODOS, en orden de cola, más el anfitrión) solo se
         envía cuando cambia la lista de ids o su ORDEN: cuando alguien entra o
         sale, o cuando empieza una ronda y los que juegan pasan al final de la
         cola. Nombres y colores no cambian durante la sesión. Va a todos los
@@ -115,12 +117,13 @@ class GameSession:
         (uno nuevo reemplaza al anterior, así que si el buzón de un cliente
         lento pisa uno, no se pierde nada)."""
         ids = tuple(self.world.queue())   # el orden del roster ES la cola
-        if ids == self._last_roster_ids:
+        host = self.world.host()          # si el anfitrión se va, cambia aunque la lista no
+        if (ids, host) == self._last_roster:
             return
-        self._last_roster_ids = ids
+        self._last_roster = (ids, host)
         players = self.world.players
         entries = tuple(RosterEntry(i, players[i].name, players[i].color) for i in ids)
-        data = self._encoder.encode_roster(entries)   # UNA vez, como el estado
+        data = self._encoder.encode_roster(entries, host)   # UNA vez, como el estado
         for observer in self._observers.values():
             self._notify(observer, observer.on_roster, data)
 

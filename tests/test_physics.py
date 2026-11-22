@@ -309,3 +309,17 @@ def test_puntos_de_aparicion_dentro_y_separados():
         assert (p - q).length() > 2 * CFG.DISC_RADIUS
     assert all(p.length() + CFG.DISC_RADIUS < CFG.ARENA_RADIUS for p in points)
     assert math.isclose(points[0].length(), CFG.ARENA_RADIUS * CFG.SPAWN_RING_FRACTION)
+
+
+def test_un_toque_corto_no_embiste_ni_gasta_enfriamiento(physics):
+    """Visto jugando: un toque de 0,1 s daba una embestida más lenta que caminar
+    y encima bloqueaba la carga 1,5 s."""
+    d = Disc(1, Vec2(0, 0))
+    charge_and_release(physics, d, round((CFG.MIN_CHARGE_S / CFG.TICK_DT) / 2))
+    assert d.vel.length() == 0 and d.cooldown == 0.0 and not d.dashing
+
+
+def test_con_la_carga_minima_si_embiste(physics):
+    d = Disc(1, Vec2(0, 0))
+    charge_and_release(physics, d, round(CFG.MIN_CHARGE_S / CFG.TICK_DT) + 1)
+    assert d.vel.length() > 0 and d.cooldown > 0.0

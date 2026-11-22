@@ -1,12 +1,13 @@
 """Bots: N jugadores simulados para cargar el servidor.
 
 Uso (con el servidor corriendo):
-    .venv/bin/python tools/bots.py [--count 50] [--duration 30] [--port 8080] [--ramp 0.02]
+    .venv/bin/python tools/bots.py [--count 50] [--duration 30] [--port 8080] [--ramp 0.02] [--host]
 
 Cada bot hace lo que haría el navegador: saluda con `hello`, CONTESTA los ping
 del servidor (si no, el servidor lo echa por inactividad a los 30 s), lee los
-estados y cada tanto cambia de dirección o carga una embestida. Con más bots
-que MAX_ACTIVE_PLAYERS (12) el resto juega de espectador; con más que
+estados y cada tanto cambia de dirección o carga una embestida. Hace falta un anfitrión que inicie la ronda: tú desde el
+navegador (entra PRIMERO) o `--host`, que hace al bot 0 anfitrión. Con más
+bots que MAX_ACTIVE_PLAYERS (12) el resto juega de espectador; con más que
 MAX_CONNECTIONS (100) el servidor responde `full` y cierra con 1013.
 
 Al terminar imprime cuántos estados llegaron, cómo se cerró cada conexión y
@@ -27,6 +28,7 @@ THINK_MIN_S, THINK_MAX_S = 0.3, 1.0     # cada cuánto cambia de idea (un humano
 CHARGE_CHANCE = 0.15                    # probabilidad de intentar una embestida en cada decisión
 CHARGE_MIN_S, CHARGE_MAX_S = 0.3, 1.0   # cuánto mantiene la carga
 PROGRESS_EVERY_S = 5.0
+HOST_START_EVERY_S = 1.0               # cada cuánto el bot anfitrión pide iniciar
 STATE_PREFIX = b'{"t":"state"'
 ERROR_PREFIX = b'{"t":"error","code":"'
 
@@ -55,6 +57,16 @@ async def behave(conn: WsConn, rng: random.Random, stop: asyncio.Event) -> None:
         await asyncio.sleep(rng.uniform(THINK_MIN_S, THINK_MAX_S))
 
 
+async def host_loop(conn: WsConn) -> None:
+    """Hace de anfitrión: pide iniciar cada segundo. Es inofensivo fuera de la
+    sala (el servidor descarta la orden al terminar cada ronda) y así las rondas
+    se encadenan solas durante una prueba de carga. Sin esto, con solo bots, la
+    sala de espera esperaría para siempre."""
+    while True:
+        await conn.send_json({"t": "start"})
+        await asyncio.sleep(HOST_START_EVERY_S)
+
+
 async def listen(conn: WsConn, stats: Stats) -> str:
     """Lee hasta que la conexión termine. Devuelve cómo terminó."""
     while True:
@@ -70,7 +82,8 @@ async def listen(conn: WsConn, stats: Stats) -> str:
             return f"close {WsConn.close_code(payload)}"
 
 
-async def bot(index: int, port: int, stats: Stats, deadline: float, rng: random.Random) -> None:
+async def bot(index: int, port: int, stats: Stats, deadline: float, rng: random.Random,
+              is_host: bool = False) -> None:
     try:
         conn = await connect(port)
     except (OSError, HandshakeFailed, asyncio.TimeoutError):
@@ -81,7 +94,7 @@ async def bot(index: int, port: int, stats: Stats, deadline: float, rng: random.
     actor = None
     try:
         await conn.send_json({"t": "hello", "name": f"bot{index}"})
-        actor = asyncio.create_task(behave(conn, rng, stop))
+        actor = asyncio.create_task(host_loop(conn) if is_host else behave(conn, rng, stop))
         try:
             ended = await asyncio.wait_for(listen(conn, stats), max(0.1, deadline - time.monotonic()))
             stats.closes[ended] += 1                    # lo cerró el servidor
@@ -117,6 +130,9 @@ async def main() -> None:
     parser.add_argument("--ramp", type=float, default=0.02,
                         help="segundos entre una conexión y la siguiente (0 = todas de golpe)")
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--host", action="store_true",
+                        help="el bot 0 hace de anfitrión (pide iniciar cada segundo, no juega). "
+                             "No lo uses si entras tú desde el navegador: el anfitrión eres tú.")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -127,7 +143,7 @@ async def main() -> None:
     reporter = asyncio.create_task(progress(stats, started))
     tasks = []
     for i in range(args.count):
-        tasks.append(asyncio.create_task(bot(i, args.port, stats, deadline, random.Random(rng.random()))))
+        tasks.append(asyncio.create_task(bot(i, args.port, stats, deadline, random.Random(rng.random()), args.host and i == 0)))
         if args.ramp:
             await asyncio.sleep(args.ramp)
     await asyncio.gather(*tasks)

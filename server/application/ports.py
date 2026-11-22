@@ -37,6 +37,8 @@ class WelcomeInfo:
     disc_radius: float
     max_players: int           # jugadores por ronda: el cliente calcula en qué turno le toca
     dash_cooldown_s: float     # para mostrar el enfriamiento de la embestida
+    min_charge: float          # fracción de carga (0 a 1) bajo la cual soltar no embiste ni enfría
+    min_players: int           # jugadores que hacen falta para que el anfitrión pueda iniciar
 
 
 @dataclass(frozen=True)
@@ -75,4 +77,4 @@ class SnapshotEncoder(ABC):
     def encode_welcome(self, welcome: WelcomeInfo) -> bytes: ...
 
     @abstractmethod
-    def encode_roster(self, entries: tuple[RosterEntry, ...]) -> bytes: ...
+    def encode_roster(self, entries: tuple[RosterEntry, ...], host: int | None) -> bytes: ...

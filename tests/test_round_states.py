@@ -6,7 +6,7 @@ import pytest
 
 from server.config import Config
 from server.domain.arena import Arena
-from server.domain.commands import ChargeCommand, JoinCommand, LeaveCommand, MoveCommand
+from server.domain.commands import ChargeCommand, JoinCommand, LeaveCommand, MoveCommand, StartCommand
 from server.domain.physics import Physics
 from server.domain.round_states import (
     Countdown, Playing, RoundContext, RoundOver, RoundState, Waiting,
@@ -38,8 +38,14 @@ def tick(state: RoundState, world: World, n: int = 1) -> RoundState:
     return state
 
 
+def begin(ctx: RoundContext, world: World) -> RoundState:
+    """El anfitrión (el primero en llegar, id 1) inicia desde la sala."""
+    StartCommand(1).execute(world)
+    return tick(Waiting(ctx), world)
+
+
 def to_playing(ctx: RoundContext, world: World) -> RoundState:
-    state = tick(Waiting(ctx, lobby=False), world)
+    state = begin(ctx, world)
     return tick(state, world, ctx.ticks_for(CFG.COUNTDOWN_S))
 
 
@@ -50,7 +56,7 @@ def test_waiting_espera_al_minimo(ctx, world):
 
 def test_waiting_inicia_cuenta_regresiva(ctx, world):
     join(world, CFG.MIN_PLAYERS_TO_START)
-    state = tick(Waiting(ctx, lobby=False), world)
+    state = begin(ctx, world)
     assert isinstance(state, Countdown)
     assert state.remaining_s == pytest.approx(CFG.COUNTDOWN_S)
     assert len(world.discs) == CFG.MIN_PLAYERS_TO_START
@@ -58,7 +64,7 @@ def test_waiting_inicia_cuenta_regresiva(ctx, world):
 
 def test_cuenta_regresiva_dura_exactamente_su_plazo(ctx, world):
     join(world, 2)
-    state = tick(Waiting(ctx, lobby=False), world)
+    state = begin(ctx, world)
     n = ctx.ticks_for(CFG.COUNTDOWN_S)
     assert isinstance(tick(state, world, n - 1), Countdown)
     assert isinstance(state.on_tick(world), Playing)
@@ -66,7 +72,7 @@ def test_cuenta_regresiva_dura_exactamente_su_plazo(ctx, world):
 
 def test_cuenta_regresiva_se_cancela_si_alguien_se_va(ctx, world):
     join(world, 2)
-    state = tick(Waiting(ctx, lobby=False), world)
+    state = begin(ctx, world)
     LeaveCommand(1).execute(world)
     state = tick(state, world)
     assert isinstance(state, Waiting)
@@ -75,7 +81,7 @@ def test_cuenta_regresiva_se_cancela_si_alguien_se_va(ctx, world):
 
 def test_discos_quietos_fuera_de_playing(ctx, world):
     join(world, 2)
-    state = tick(Waiting(ctx, lobby=False), world)
+    state = begin(ctx, world)
     MoveCommand(1, 1, 0).execute(world)
     before = world.disc(1).pos
     tick(state, world, 10)
@@ -148,60 +154,65 @@ def test_ningun_estado_lanza_excepciones_con_entradas_al_azar(ctx, world):
             MoveCommand(pid, rng.choice((-1, 0, 1)), rng.choice((-1, 0, 1))).execute(world)
         elif roll < 0.6:
             ChargeCommand(pid, rng.random() < 0.5).execute(world)
+        elif roll < 0.7:
+            StartCommand(pid).execute(world)
         state = state.on_tick(world)
         assert isinstance(state, RoundState)
     assert sum(world.scores.values()) > 0  # se jugaron rondas de verdad
 
 
-# ---------------- sala de espera (lobby) ----------------
+# ---------------- sala de espera con anfitrión ----------------
 
-def test_sala_de_espera_no_arranca_al_llegar_al_minimo(ctx, world):
-    join(world, 2)
-    waiting = Waiting(ctx)
-    state = tick(waiting, world, ctx.ticks_for(CFG.LOBBY_WAIT_S) - 1)
-    assert state is waiting and world.discs == {}          # sigue esperando, nadie juega aún
-    assert 0 < waiting.remaining_s <= CFG.LOBBY_WAIT_S      # y dice cuánto falta
+def test_la_sala_no_arranca_sola(ctx, world):
+    join(world, CFG.MAX_ACTIVE_PLAYERS)          # ni siquiera llena
+    assert isinstance(tick(Waiting(ctx), world, 500), Waiting) and world.discs == {}
 
 
-def test_sala_de_espera_arranca_al_terminar_el_plazo(ctx, world):
-    join(world, 2)
-    state = tick(Waiting(ctx), world, ctx.ticks_for(CFG.LOBBY_WAIT_S) + 1)
-    assert isinstance(state, Countdown)
-
-
-def test_los_que_llegan_durante_la_sala_entran_en_esa_misma_ronda(ctx, world):
-    """El caso que se vio con 50 bots: tú + bot0 no deben jugar solos."""
-    join(world, 2)
-    waiting = Waiting(ctx)
-    tick(waiting, world, 10)
-    for pid in (3, 4, 5):
-        world.add_player(pid, f"bot{pid}")
-    state = tick(waiting, world, ctx.ticks_for(CFG.LOBBY_WAIT_S))
-    assert isinstance(state, Countdown)
-    assert sorted(world.discs) == [1, 2, 3, 4, 5]
-
-
-def test_sala_llena_arranca_sin_esperar(ctx, world):
-    join(world, CFG.MAX_ACTIVE_PLAYERS)
+def test_solo_el_anfitrion_inicia(ctx, world):
+    join(world, 3)
+    StartCommand(2).execute(world)               # no es el anfitrión
+    assert isinstance(tick(Waiting(ctx), world), Waiting)
+    StartCommand(1).execute(world)
     assert isinstance(tick(Waiting(ctx), world), Countdown)
 
 
-def test_si_baja_del_minimo_la_sala_empieza_de_cero(ctx, world):
-    join(world, 2)
+def test_el_anfitrion_es_el_mas_antiguo_y_pasa_al_siguiente(ctx, world):
+    join(world, 3)
+    assert world.host() == 1
+    LeaveCommand(1).execute(world)
+    assert world.host() == 2
+    StartCommand(1).execute(world)               # el que se fue ya no manda
+    assert isinstance(tick(Waiting(ctx), world), Waiting)
+
+
+def test_iniciar_sin_minimo_se_descarta_y_no_queda_guardado(ctx, world):
+    """Si la orden quedara pendiente, el siguiente en llegar dispararía la ronda
+    sin que el anfitrión lo pidiera (el fallo de 'tú + bot0 juegan solos')."""
+    join(world, 1)
     waiting = Waiting(ctx)
-    tick(waiting, world, ctx.ticks_for(CFG.LOBBY_WAIT_S) - 5)
-    LeaveCommand(2).execute(world)
-    tick(waiting, world)
-    assert waiting.remaining_s is None                      # ya no corre ningún plazo
-    world.add_player(2, "otra vez")
-    assert isinstance(tick(waiting, world, 10), Waiting)    # reinicia el plazo completo
+    StartCommand(1).execute(world)
+    assert isinstance(tick(waiting, world), Waiting)
+    world.add_player(2, "otro")
+    assert isinstance(tick(waiting, world, 5), Waiting)
 
 
-def test_tras_un_fin_de_ronda_no_hay_sala_de_espera(ctx, world):
-    join(world, 2)
-    state = tick(Waiting(ctx, lobby=False), world, 1 + ctx.ticks_for(CFG.COUNTDOWN_S))
+def test_orden_dada_durante_la_ronda_no_cuenta_para_la_siguiente(ctx, world):
+    join(world, 3)
+    state = to_playing(ctx, world)
+    StartCommand(1).execute(world)               # inicia "de más" a mitad de ronda
     world.disc(2).pos = Vec2(CFG.ARENA_RADIUS * 3, 0)
-    state = tick(state, world, 1)                           # cae: RoundOver
-    state = tick(state, world, ctx.ticks_for(CFG.RESULTS_S))
+    world.disc(3).pos = Vec2(CFG.ARENA_RADIUS * 3, 0)
+    state = tick(state, world, 1 + ctx.ticks_for(CFG.RESULTS_S))   # RoundOver y fin
     assert isinstance(state, Waiting)
-    assert isinstance(tick(state, world, 1), Countdown)     # arranca en el acto
+    assert isinstance(tick(state, world, 30), Waiting)             # espera al anfitrión
+
+
+def test_tras_un_fin_de_ronda_vuelve_a_la_sala(ctx, world):
+    join(world, 2)
+    state = to_playing(ctx, world)
+    world.disc(2).pos = Vec2(CFG.ARENA_RADIUS * 3, 0)
+    state = tick(state, world, 1 + ctx.ticks_for(CFG.RESULTS_S))
+    assert isinstance(state, Waiting)
+    assert isinstance(tick(state, world, 30), Waiting)             # no hay arranque automático
+    StartCommand(1).execute(world)
+    assert isinstance(tick(state, world), Countdown)

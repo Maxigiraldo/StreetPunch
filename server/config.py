@@ -161,14 +161,6 @@ class Config:
     # Con uno solo no hay partida.
     MIN_PLAYERS_TO_START: int = 2
 
-    # Sala de espera: cuando ya hay MIN_PLAYERS_TO_START, la ronda NO arranca
-    # al instante, se espera esto para que lleguen más (si se llena con
-    # MAX_ACTIVE_PLAYERS, arranca ya). Sin ella, "tú + el primer bot" jugaban
-    # solos una ronda entera mientras los otros 49 esperaban su turno (visto
-    # con tools/bots.py). 5 s alcanza para que entre una ráfaga de bots o
-    # unas pestañas abiertas a mano. Entre rondas seguidas NO se espera (el
-    # grupo ya está), solo al reunir el mínimo de cero. 0 desactiva la sala.
-    LOBBY_WAIT_S: float = 5.0
 
     # Duración de la cuenta regresiva y de la pantalla de resultados.
     COUNTDOWN_S: float = 3.0
@@ -177,6 +169,12 @@ class Config:
     # Embestida: se carga hasta 1 s y luego queda en enfriamiento 1,5 s.
     # Valores de jugabilidad; se ajustan jugando (P5).
     CHARGE_MAX_S: float = 1.0
+    # Carga mínima para que soltar lance la embestida. Un toque de 0,1 s daba
+    # 600 x 0,1 = 60 px/s: MÁS LENTO que caminar (170) y encima gastaba el
+    # enfriamiento de 1,5 s (visto jugando: "no deja cargar mientras me
+    # muevo"). Por debajo de esto soltar se ignora, sin enfriamiento. 0,2 s
+    # = 120 px/s, aún suave, pero ya no es un toque accidental; 0 lo desactiva.
+    MIN_CHARGE_S: float = 0.2
     DASH_COOLDOWN_S: float = 1.5
 
     # ------------------------------------------------------------------
@@ -311,8 +309,8 @@ class Config:
         if self.DISC_RADIUS * 4 > self.ARENA_RADIUS:
             errors.append("DISC_RADIUS es demasiado grande para ARENA_RADIUS")
 
-        if self.LOBBY_WAIT_S < 0:
-            errors.append("LOBBY_WAIT_S no puede ser negativo")
+        if not 0 <= self.MIN_CHARGE_S < self.CHARGE_MAX_S:
+            errors.append("MIN_CHARGE_S debe estar entre 0 y CHARGE_MAX_S")
 
         if self.ELIMINATION_MARGIN_DISCS < 0:
             errors.append("ELIMINATION_MARGIN_DISCS no puede ser negativo")

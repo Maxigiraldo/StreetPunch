@@ -39,6 +39,8 @@ class World:
         # Discos de la ronda actual (vivos y eliminados). Vacío fuera de ronda.
         self.discs: dict[int, Disc] = {}
         self.scores: dict[int, int] = {}
+        # El anfitrión pidió iniciar. Lo consume la sala de espera (Waiting).
+        self._start_requested = False
 
     # ---------------- registro ----------------
 
@@ -54,6 +56,21 @@ class World:
         self._last_round.pop(player_id, None)
         self.discs.pop(player_id, None)   # RF-04: su disco desaparece
         self.scores.pop(player_id, None)
+
+    def host(self) -> int | None:
+        """Anfitrión de la sala: el que lleva más tiempo conectado (el primero
+        en `players`, que nunca se reordena). Se DEDUCE, no se guarda: si el
+        anfitrión se va, el siguiente lo es sin ningún código de traspaso."""
+        return next(iter(self.players), None)
+
+    def request_start(self, player_id: int) -> None:
+        """Solo el anfitrión puede iniciar: la orden de otro se ignora."""
+        if player_id == self.host():
+            self._start_requested = True
+
+    def take_start_request(self) -> bool:
+        requested, self._start_requested = self._start_requested, False
+        return requested
 
     def queue(self) -> list[int]:
         """Orden de turno: primero quienes NUNCA han jugado o jugaron hace más
@@ -95,6 +112,7 @@ class World:
 
     def end_round(self) -> None:
         self.discs = {}
+        self._start_requested = False   # una orden dada durante la ronda no cuenta para la siguiente
 
     def alive_discs(self) -> list[Disc]:
         return [d for d in self.discs.values() if d.alive]

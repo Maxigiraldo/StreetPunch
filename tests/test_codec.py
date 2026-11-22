@@ -111,16 +111,17 @@ def test_estado_sin_plazo_ms_null():
 
 
 def test_welcome_formato():
-    w = WelcomeInfo(7, "#e4572e", "spectator", 300.0, 24.0, 12, 1.5)
+    w = WelcomeInfo(7, "#e4572e", "spectator", 300.0, 24.0, 12, 1.5, 0.2, 2)
     assert unframe(JsonFrameEncoder(CFG).encode_welcome(w)) == {
         "t": "welcome", "id": 7, "color": "#e4572e", "role": "spectator",
-        "arena": {"radius": 300.0, "disc_radius": 24.0}, "max_players": 12, "dash_cooldown_s": 1.5}
+        "arena": {"radius": 300.0, "disc_radius": 24.0}, "max_players": 12, "dash_cooldown_s": 1.5,
+        "min_charge": 0.2, "min_players": 2}
 
 
 def test_roster_formato():
     entries = (RosterEntry(7, "Ana", "#e4572e"), RosterEntry(9, "Luis", "#17bebb"))
-    assert unframe(JsonFrameEncoder(CFG).encode_roster(entries)) == {
-        "t": "roster", "players": [{"id": 7, "name": "Ana", "color": "#e4572e"},
+    assert unframe(JsonFrameEncoder(CFG).encode_roster(entries, 7)) == {
+        "t": "roster", "host": 7, "players": [{"id": 7, "name": "Ana", "color": "#e4572e"},
                                    {"id": 9, "name": "Luis", "color": "#17bebb"}]}
 
 

@@ -63,44 +63,22 @@ class _TimedState(RoundState):
 
 
 class Waiting(RoundState):
-    """Espera jugadores. Con el mínimo reunido abre una sala de espera de
-    LOBBY_WAIT_S para que lleguen más; si se llena, arranca de inmediato.
-
-    `lobby=False` (tras un fin de ronda) arranca en cuanto hay mínimo: el
-    grupo ya está reunido y esperar otra vez solo haría perder tiempo.
-    """
+    """Sala de espera. La ronda NO arranca sola: la inicia el anfitrión (el
+    primero en llegar) cuando ve en la lista que ya están todos, y solo si
+    hay MIN_PLAYERS_TO_START. Antes arrancaba al reunir el mínimo y quien
+    llegaba segundo jugaba solo contra el primero mientras el resto esperaba;
+    cualquier regla automática de "cuántos esperar" repetía ese problema."""
     PHASE = "waiting"
 
-    def __init__(self, ctx: RoundContext, lobby: bool = True) -> None:
-        super().__init__(ctx)
-        self._lobby_ticks = ctx.ticks_for(ctx.config.LOBBY_WAIT_S) if lobby else 0
-        self._ticks_left: int | None = None   # None = aún no se reúne el mínimo
-
-    @property
-    def remaining_s(self) -> float | None:
-        """Segundos para que arranque, solo mientras corre la sala de espera."""
-        if self._ticks_left is None:
-            return None
-        return self._ticks_left / self._ctx.config.TICK_HZ
-
     def on_tick(self, world: World) -> RoundState:
-        cfg = self._ctx.config
-        players = world.player_count()
-        if players < cfg.MIN_PLAYERS_TO_START:
-            self._ticks_left = None      # alguien se fue: la sala empieza de cero
-            return self
-        if players >= cfg.MAX_ACTIVE_PLAYERS:
-            return self._start(world)    # sala llena: no hay a quién esperar
-        if self._ticks_left is None:
-            self._ticks_left = self._lobby_ticks
-        if self._ticks_left > 0:
-            self._ticks_left -= 1
-            return self
-        return self._start(world)
-
-    def _start(self, world: World) -> RoundState:
-        world.start_round()
-        return Countdown(self._ctx)
+        # take_start_request se llama SIEMPRE: una orden dada sin mínimo de
+        # jugadores se descarta en vez de quedar guardada y disparar la ronda
+        # cuando llegue el siguiente.
+        requested = world.take_start_request()
+        if requested and world.player_count() >= self._ctx.config.MIN_PLAYERS_TO_START:
+            world.start_round()
+            return Countdown(self._ctx)
+        return self
 
 
 class Countdown(_TimedState):
@@ -152,4 +130,4 @@ class RoundOver(_TimedState):
         if self._ticks_left > 0:
             return self
         world.end_round()
-        return Waiting(self._ctx, lobby=False)   # el grupo ya está reunido
+        return Waiting(self._ctx)

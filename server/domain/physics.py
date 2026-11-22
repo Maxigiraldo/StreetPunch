@@ -75,9 +75,11 @@ class Physics:
             disc.charge_time = min(disc.charge_time + dt, cfg.CHARGE_MAX_S)
         if disc.release_pending:
             disc.release_pending = False
-            # Soltar sin carga (p. ej. en enfriamiento) no hace nada y no
-            # reinicia el enfriamiento.
-            if disc.charge_time > 0.0:
+            # Soltar sin carga suficiente (p. ej. en enfriamiento, o un toque
+            # corto) no hace nada y no reinicia el enfriamiento.
+            if disc.charge_time < cfg.MIN_CHARGE_S:
+                disc.charge_time = 0.0   # toque corto: se descarta sin gastar enfriamiento
+            elif disc.charge_time > 0.0:
                 fraction = disc.charge_time / cfg.CHARGE_MAX_S
                 disc.vel = disc.facing * (cfg.DASH_MAX_SPEED * fraction)
                 disc.dashing = True

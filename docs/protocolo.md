@@ -63,7 +63,8 @@ cliente                                servidor
 | --- | --- | --- | --- |
 | `hello` | `name`: string | `{"t":"hello","name":"Ana"}` | Solo una vez. Tras quitar espacios, entre 1 y `MAX_NAME_LEN` (16) caracteres. Si no, `bad_name` |
 | `input` | `dx`, `dy`: entero en {-1, 0, 1} (no booleano) | `{"t":"input","dx":1,"dy":-1}` | Fuera de rango → `bad_message` |
-| `charge` | `on`: booleano | `{"t":"charge","on":true}` | `true` empieza a cargar y `false` suelta la embestida. Si no es booleano → `bad_message` |
+| `charge` | `on`: booleano | `{"t":"charge","on":true}` | `true` empieza a cargar y `false` suelta la embestida. Si no es booleano → `bad_message`. Una carga menor que `min_charge` no embiste ni gasta enfriamiento |
+| `start` | (ninguno) | `{"t":"start"}` | Pide iniciar la ronda desde la sala de espera. **Solo cuenta si viene del anfitrión** (el conectado más antiguo) y solo en `waiting`; de cualquier otro, o en otra fase, se ignora sin error. Sin `MIN_PLAYERS_TO_START` jugadores tampoco hace nada, y la orden no queda guardada |
 
 - Los campos desconocidos se **ignoran**. Si un cliente manda `x`/`y`, el servidor ni los lee.
 - Solo se aplican `MAX_INPUTS_PER_CLIENT_PER_TICK` (4) entradas por cliente por tick. Las demás se descartan en silencio y se cuentan en las métricas, sin error ni cierre.
@@ -74,7 +75,7 @@ cliente                                servidor
 ### `welcome` (una sola vez, dirigido a un cliente)
 
 ```json
-{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{"radius":300.0,"disc_radius":24.0},"max_players":12,"dash_cooldown_s":1.5}
+{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{"radius":300.0,"disc_radius":24.0},"max_players":12,"dash_cooldown_s":1.5,"min_charge":0.2,"min_players":2}
 ```
 
 | Campo | Significado |
@@ -85,14 +86,18 @@ cliente                                servidor
 | `arena` | Geometría para dibujar |
 | `max_players` | Jugadores por ronda. Con el orden del `roster` el cliente calcula en qué turno entra un espectador |
 | `dash_cooldown_s` | Segundos de enfriamiento tras una embestida; el cliente dibuja el anillo de recarga |
+| `min_charge` | Fracción de carga (0 a 1) por debajo de la cual soltar no embiste ni inicia el enfriamiento |
+| `min_players` | Jugadores que hacen falta para que el anfitrión pueda iniciar |
 
 Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mismo tick en que ejecuta el `JoinCommand`, y el `writer` lo envía antes que el contenido del buzón.
 
 ### `roster` (a todos, cuando alguien entra o sale)
 
 ```json
-{"t":"roster","players":[{"id":7,"name":"Ana","color":"#e4572e"},{"id":9,"name":"Luis","color":"#17bebb"}]}
+{"t":"roster","host":7,"players":[{"id":7,"name":"Ana","color":"#e4572e"},{"id":9,"name":"Luis","color":"#17bebb"}]}
 ```
+
+`host` es el id del **anfitrión de la sala**: el conectado más antiguo. No se guarda, se deduce: si se va, lo es el siguiente más antiguo y el roster se reenvía. Es quien puede mandar `start`.
 
 Lista **completa**, **en orden de cola**, de todos los conectados que ya hicieron `hello` (jugadores y espectadores). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
 
@@ -113,7 +118,7 @@ Lista **completa**, **en orden de cola**, de todos los conectados que ya hiciero
 | --- | --- |
 | `tick` | Número de tick, creciente. Sirve para descartar estados viejos y para interpolar |
 | `phase` | `"waiting"`, `"countdown"`, `"playing"` o `"round_over"` |
-| `ms` | Milisegundos que le quedan a la fase actual; `null` si la fase no tiene plazo (`playing`, o `waiting` sin el mínimo de jugadores). En `waiting` con el mínimo reunido es lo que falta para que arranque la ronda (sala de espera, `LOBBY_WAIT_S`) |
+| `ms` | Milisegundos que le quedan a la fase actual; `null` si la fase no tiene plazo (`waiting` y `playing`). La sala de espera no tiene plazo: no arranca sola, la inicia el anfitrión con `start` |
 | `winner` | Id del ganador durante `round_over`; `null` en las demás fases o si nadie ganó |
 | `scores` | Rondas ganadas por id (las claves son strings porque JSON solo admite claves string) |
 | `d` | Discos de la ronda: `[id, x, y, carga 0..1, vivo 1/0]`. Un disco eliminado queda con `vivo = 0` hasta el fin de la ronda |

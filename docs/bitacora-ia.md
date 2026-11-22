@@ -211,3 +211,15 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
 - **Corrección:** en la prueba, enviar la salida a un archivo. Con eso: 80 conexiones con solo 30 descriptores, el servidor sigue vivo y vuelve a contestar `/metrics` a los 2,5 s de soltarlas.
 - **Por qué es un error:** el error fue de la prueba, pero revela un riesgo real del servidor que viola la regla "nada bloqueante en el event loop" (AGENTS.md §4.8): `logging` con un destino lento (terminal, pipe, disco) frena el tick y a todos los clientes. El diseño actual no lo evita; la mitigación estándar es un `QueueHandler` con un hilo aparte, y queda como riesgo documentado.
 - **Cómo se verificó:** `/proc/<pid>/fd` y `ss -tan` durante la prueba; `faulthandler` y la lista de tareas mostraron las conexiones sin atender; con la salida a un archivo el tiempo de recuperación fue de 2,5 s y la salida del proceso 0.
+
+### 9. La "sala de espera" arrancaba sola y dejaba un estado pegado: la ronda empezaba con el primer bot
+
+- **Fecha y paso:** 2026-11-22 · P7 (pruebas con `tools/bots.py` y navegador)
+- **Detectado por:** Max, jugando.
+- **Prompt:**
+  > "...cuando vuelvo a poner bots solo entran 2 junto a mí y el resto queda por fuera [...] no está bien definido cuando inicia la ronda ni con cuantos"
+- **Qué generó la IA:** primero, arrancar al reunir 2 jugadores; después, una sala de espera automática de `LOBBY_WAIT_S` = 5 s, y `RoundOver` devolvía `Waiting(ctx, lobby=False)` para no esperar entre rondas seguidas.
+- **Problema (categoría: concurrencia/diseño de estados):** el `lobby=False` no se reiniciaba nunca. Cuando todos los jugadores se iban, el estado seguía siendo "sin sala", y el primer bot que llegaba junto a Max sumaba 2 jugadores y arrancaba la ronda al instante. Además, cualquier regla automática de "cuánto esperar" es una apuesta: 5 s sirven para 12 bots lanzados de golpe y no para personas abriendo pestañas.
+- **Corrección:** quitar el arranque automático (`LOBBY_WAIT_S` eliminado). `Waiting` solo arranca con la orden `start` del anfitrión (`server/domain/round_states.py`, `World.host()` y `request_start`). Una orden sin mínimo de jugadores se descarta y no queda guardada.
+- **Por qué es un error:** un estado que "recuerda" una decisión de una situación anterior (el grupo ya estaba reunido) sin que nada lo invalide es estado oculto; y la corrección a medias (añadir un temporizador) trató el síntoma, no que nadie decidía cuándo estaban "todos".
+- **Cómo se verificó:** pruebas nuevas en `tests/test_round_states.py` (la sala no arranca sola ni llena, solo el anfitrión inicia, el anfitrión pasa al siguiente si se va, una orden sin mínimo no queda pendiente, una orden dada en plena ronda no cuenta); y con 30 bots más Max: nada arrancó sin su orden, y una segunda tanda de 5 bots quedó en la sala sin disparar ninguna ronda.

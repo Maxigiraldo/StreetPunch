@@ -35,11 +35,12 @@
       <input id="name" maxlength="16" placeholder="Tu nombre" autocomplete="off" required>
       <button id="enter">Entrar</button>
     </form>
+    <button id="start" hidden>Iniciar partida</button>
     <p id="status">Escribe un nombre para entrar.</p>
     <canvas id="arena" width="640" height="640"></canvas>
     <p id="hud"></p>
     <ul id="scores" aria-label="Marcador"></ul>
-    <p id="help">Moverse: flechas o WASD. Embestir: mantén Espacio (o J / K) para cargar y suelta. Tras embestir hay 1,5 s de recarga: el anillo gris la muestra.</p>
+    <p id="help">Moverse: flechas o WASD. Embestir: mantén Espacio (o J / K) para cargar y suelta. Un toque muy corto no embiste. Tras embestir hay 1,5 s de recarga: el anillo gris la muestra. El primero en entrar es el anfitrión y pulsa «Iniciar partida».</p>
   </main>
   <script src="/client.js"></script>
 </body>

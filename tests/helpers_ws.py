@@ -80,9 +80,7 @@ class WsClient:
 @asynccontextmanager
 async def running_server(config: Config | None = None, static=None):
     """Servidor real en un puerto libre (PORT=0: el kernel elige uno)."""
-    # Las pruebas no esperan la sala de espera de 5 s (LOBBY_WAIT_S): la de la
-    # sala tiene sus propias pruebas en test_round_states.py.
-    app = build(dataclasses.replace(config or Config(PORT=0), LOBBY_WAIT_S=0.0), static or {})
+    app = build(config or Config(PORT=0), static or {})
     task = asyncio.create_task(app.run())
     await asyncio.sleep(0)   # dejar que start_server arranque
     try:

@@ -44,6 +44,15 @@ class LeaveCommand(Command):
 
 
 @dataclass(frozen=True)
+class StartCommand(Command):
+    """El anfitrión de la sala pide iniciar la ronda."""
+    player_id: int
+
+    def execute(self, world: World) -> None:
+        world.request_start(self.player_id)
+
+
+@dataclass(frozen=True)
 class MoveCommand(Command):
     player_id: int
     dx: int

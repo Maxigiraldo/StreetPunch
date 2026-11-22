@@ -195,6 +195,10 @@ class Report:
 
 def next_round_playing(a: Client) -> dict:
     """Espera a la siguiente ronda (fin de la anterior + cuenta atrás) y devuelve su primer `playing`."""
+    # La sala no arranca sola: se espera a estar en `waiting` (una orden dada antes
+    # se descarta al terminar la ronda) y entonces el anfitrión (a) pulsa iniciar.
+    collect(a, lambda s: s["phase"] == "waiting")
+    a.send({"t": "start"})
     return collect(a, lambda s: s["phase"] == "playing" and s["tick"] > 0)[-1]
 
 
@@ -341,6 +345,7 @@ def main() -> int:
         a, b = Client("Ana", args.port), Client("Luis", args.port)
         a.join()
         b.join()
+        a.send({"t": "start"})     # Ana entró primero: es la anfitriona
         round1(a, b, cfg, rep)
         round2(a, cfg, rep, b)
         round3(a, cfg, rep, b)
