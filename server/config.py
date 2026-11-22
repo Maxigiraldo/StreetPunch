@@ -43,6 +43,17 @@ class Config:
     # anuncie 2^63 bytes nos haría intentar reservar exabytes.
     MAX_FRAME_BYTES: int = 4096
 
+    # Tope de la cabecera HTTP del saludo. Un navegador manda ~0,5-2 KB
+    # (más si hay cookies de localhost); 8 KB es el valor por defecto de
+    # servidores como nginx. Sin tope, un cliente podría mandar cabeceras
+    # infinitas y llenarnos la memoria sin terminar nunca el saludo.
+    MAX_HTTP_HEADER_BYTES: int = 8192
+
+    # Cuántos bytes pedir por cada read() del socket. Es un MÁXIMO, no una
+    # promesa: TCP puede entregar menos (media trama) o varias tramas
+    # juntas. 4 KB cubre una trama máxima de una sola vez casi siempre.
+    READ_CHUNK_BYTES: int = 4096
+
     # ------------------------------------------------------------------
     # Tick y difusión
     # ------------------------------------------------------------------

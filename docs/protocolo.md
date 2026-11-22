@@ -15,6 +15,20 @@ Los límites numéricos que se citan aquí viven en `server/config.py`.
 | WebSocket | RFC 6455. Solo se usan tramas de texto (`0x1`), close (`0x8`), ping (`0x9`) y pong (`0xA`) |
 | Mensajes | Una trama de texto = un objeto JSON en UTF-8 con un campo `t` (tipo) |
 
+### Respuestas HTTP del saludo
+
+| Situación | Respuesta |
+| --- | --- |
+| `GET /` o un archivo del cliente | 200, el archivo ya cargado en memoria, y se cierra la conexión |
+| `GET /ws` válido (§4.2.1 del RFC) | 101 con `Sec-WebSocket-Accept = base64(SHA-1(clave + GUID))` |
+| Ruta que no está en la lista blanca | 404 |
+| Método distinto de `GET` | 405 |
+| Falta `Host`, `Upgrade` o `Connection: upgrade`, o la clave no son 16 bytes en base64 | 400 |
+| `Sec-WebSocket-Version` ≠ 13 | 426 con `Sec-WebSocket-Version: 13` |
+| Cabecera > `MAX_HTTP_HEADER_BYTES` (8 KB) | 431 |
+
+Si en el mismo `read()` llegan bytes después de la cabecera (la primera trama), no se pierden: pasan al `FrameReader`.
+
 ### Reglas de framing
 
 - Las tramas del cliente **deben** venir enmascaradas. Si una no trae máscara, se cierra con **1002**.
@@ -23,6 +37,7 @@ Los límites numéricos que se citan aquí viven en `server/config.py`.
 - Las tramas binarias (`0x2`) no se usan. Se cierra con **1003**.
 - El servidor envía un ping cada `PING_INTERVAL_S` (10 s). Si pasan `IDLE_TIMEOUT_S` (30 s) sin recibir nada, cierra la conexión.
 - El servidor contesta cada ping con un pong que lleva el mismo payload.
+- Si una trama de texto no es UTF-8 válido, se cierra con **1007** (lo detecta el codec).
 
 ## 2. Ciclo de vida de una conexión
 
@@ -110,6 +125,7 @@ Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mi
 | 1001 | El servidor se apaga (SIGTERM/SIGINT) |
 | 1002 | Violación del framing (trama sin máscara, fragmentación) |
 | 1003 | Trama de un tipo que no se acepta (binaria) |
+| 1007 | Texto que no es UTF-8 válido |
 | 1008 | Mensaje que viola el protocolo del juego (va precedido de `error`) |
 | 1009 | Trama mayor que `MAX_FRAME_BYTES` |
 | 1013 | Servidor lleno |
