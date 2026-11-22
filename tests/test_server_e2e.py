@@ -328,7 +328,10 @@ def test_apagado_corta_al_cliente_que_no_coopera_tras_el_plazo():
         await asyncio.sleep(0.05)
         await app.shutdown()
         await asyncio.wait_for(run, 2)
-        assert await asyncio.wait_for(r.read(), 1) == b""
+        try:
+            assert await asyncio.wait_for(r.read(), 1) == b""
+        except ConnectionResetError:
+            pass                       # cortado con RST (abort_with_reset): también es "cortado"
         assert app.metrics.connections_active == 0
         w.close()
     asyncio.run(go())

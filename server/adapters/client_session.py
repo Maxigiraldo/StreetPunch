@@ -23,6 +23,7 @@ import logging
 import struct
 
 from server.adapters.codec import JsonFrameEncoder, MessageCodec, MessageError
+from server.adapters.net_util import abort_with_reset
 from server.adapters.ws_frames import CloseCode, Frame, FrameReader, FrameWriter, Opcode, ProtocolError
 from server.application.game_session import GameSession
 from server.application.ports import SnapshotObserver
@@ -274,5 +275,5 @@ class ClientSession(SnapshotObserver):
             self._metrics.write_timeouts += 1
             log.info("cliente %d: no lee desde hace %.0f s; se aborta", self.player_id,
                      self._cfg.WRITE_TIMEOUT_S)
-            self._writer.transport.abort()
+            abort_with_reset(self._writer)
             return False

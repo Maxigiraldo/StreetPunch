@@ -12,6 +12,7 @@ import socket
 from collections.abc import Callable
 
 from server.adapters.client_session import ClientSession
+from server.adapters.net_util import abort_with_reset
 from server.adapters.http_handshake import HandshakeResult, HttpHandshake
 from server.config import Config
 from server.metrics import Metrics
@@ -106,10 +107,20 @@ class Listener:
         except TimeoutError:
             log.warning("%d conexión(es) no cerraron a tiempo; se cortan", len(self._writers))
             for writer in list(self._writers):
-                writer.transport.abort()
+                abort_with_reset(writer)
             await self._no_connections.wait()   # abort() dispara los finally de cada una
 
+    def _limit_send_buffer(self, writer: asyncio.StreamWriter) -> None:
+        sock = writer.get_extra_info("socket")
+        if sock is None:
+            return
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self._cfg.SEND_BUFFER_BYTES)
+        except OSError:
+            log.warning("no se pudo fijar SO_SNDBUF; se queda el autoajuste del kernel")
+
     async def _on_connect(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._limit_send_buffer(writer)
         self._writers.add(writer)
         self._no_connections.clear()
         try:
@@ -170,7 +181,7 @@ class Listener:
         MAX_REJECTING_HANDSHAKES para que rechazar no agote los descriptores."""
         self._metrics.connections_rejected += 1
         if self._rejecting >= self._cfg.MAX_REJECTING_HANDSHAKES:
-            writer.transport.abort()
+            abort_with_reset(writer)
             return
         self._rejecting += 1
         try:
@@ -196,4 +207,4 @@ class Listener:
         try:
             await asyncio.wait_for(writer.wait_closed(), self._cfg.WRITE_TIMEOUT_S)
         except (TimeoutError, ConnectionError):
-            writer.transport.abort()
+            abort_with_reset(writer)

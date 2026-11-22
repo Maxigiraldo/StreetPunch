@@ -22,6 +22,7 @@ from server.domain.arena import Arena
 from server.domain.physics import Physics
 from server.domain.round_states import RoundContext, Waiting
 from server.domain.world import ROLE_PLAYER, ROLE_SPECTATOR, World
+from server.log_filters import RateLimitFilter
 from server.metrics import Metrics
 
 WS_PATH = "/ws"
@@ -123,6 +124,9 @@ async def serve_until_signal(app: App) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = Config()
+    # Sin descriptores libres asyncio repite el mismo error miles de veces por
+    # segundo; con logging síncrono eso frenaría el tick (ver log_filters.py).
+    logging.getLogger("asyncio").addFilter(RateLimitFilter("out of system resource", config.LOG_REPEAT_INTERVAL_S))
     asyncio.run(serve_until_signal(build(config, load_static(CLIENT_DIR))))
 
 

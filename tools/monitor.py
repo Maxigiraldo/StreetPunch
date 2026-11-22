@@ -35,18 +35,12 @@ Es una herramienta de verificación: no importa nada de `server/`.
 
 import argparse
 import json
-import os
-import socket
 import sys
 import time
 
-HOST = "127.0.0.1"
-SOCKET_TIMEOUT_S = 2.0
-READ_BYTES = 4096
+from procinfo import TCP_CLOSE_WAIT, count_tcp, fetch_metrics, find_server_pid, read_proc
+
 HEADER_EVERY_ROWS = 20
-CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
-PAGE_BYTES = os.sysconf("SC_PAGE_SIZE")
-TCP_CLOSE_WAIT, TCP_LISTEN = "08", "0A"
 
 # Umbrales de alerta. Son criterio de este monitor, no del servidor.
 WARN_TICK_P99_FRACTION = 0.5     # p99 del tick > 50 % del presupuesto
@@ -54,75 +48,6 @@ WARN_RATE_FRACTION = 0.9         # menos del 90 % de los ticks esperados por seg
 WARN_LATENCY_MS = 50.0
 
 RED, YELLOW, RESET = "\033[31m", "\033[33m", "\033[0m"
-
-
-# ---------------------------------------------------------------- proceso
-def find_server_pid(port: int) -> int | None:
-    """Proceso que ESCUCHA en `port`. Se busca por el puerto y no por el nombre
-    del comando: así, con dos servidores corriendo (p. ej. 8080 y 8081), cada
-    monitor mide el suyo. Camino: /proc/net/tcp da el inode del socket en
-    LISTEN, y el proceso dueño es el que tiene ese inode entre sus descriptores."""
-    inode = None
-    with open("/proc/net/tcp") as f:
-        next(f)
-        for line in f:
-            cols = line.split()
-            if cols[3] == TCP_LISTEN and int(cols[1].split(":")[1], 16) == port:
-                inode = cols[9]
-                break
-    if inode is None:
-        return None
-    target = f"socket:[{inode}]"
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        try:
-            for fd in os.listdir(f"/proc/{entry}/fd"):
-                if os.readlink(f"/proc/{entry}/fd/{fd}") == target:
-                    return int(entry)
-        except OSError:
-            continue   # el proceso terminó, o no es nuestro y no se puede mirar
-    return None
-
-
-def read_proc(pid: int) -> dict:
-    """fds, memoria residente (MB) y tiempo de CPU acumulado (s)."""
-    fds = len(os.listdir(f"/proc/{pid}/fd"))
-    with open(f"/proc/{pid}/stat") as f:
-        # El nombre del proceso va entre paréntesis y puede tener espacios:
-        # se parte después del último ')'.
-        fields = f.read().rsplit(")", 1)[1].split()
-    cpu_s = (int(fields[11]) + int(fields[12])) / CLOCK_TICKS   # utime + stime
-    rss_mb = int(fields[21]) * PAGE_BYTES / 1_048_576
-    return {"fds": fds, "cpu_s": cpu_s, "rss_mb": rss_mb}
-
-
-def count_close_wait(port: int) -> int:
-    """Conexiones cuyo extremo local es el servidor y quedaron en CLOSE_WAIT."""
-    total = 0
-    with open("/proc/net/tcp") as f:
-        next(f)
-        for line in f:
-            cols = line.split()
-            if int(cols[1].split(":")[1], 16) == port and cols[3] == TCP_CLOSE_WAIT:
-                total += 1
-    return total
-
-
-# ---------------------------------------------------------------- red
-def fetch_metrics(port: int) -> tuple[dict, float]:
-    """GET /metrics con una conexión nueva. Devuelve (datos, ms que tardó)."""
-    started = time.perf_counter()
-    with socket.create_connection((HOST, port), timeout=SOCKET_TIMEOUT_S) as sock:
-        sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        raw = b""
-        while chunk := sock.recv(READ_BYTES):
-            raw += chunk
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    head, _, body = raw.partition(b"\r\n\r\n")
-    if b" 200 " not in head.split(b"\r\n")[0]:
-        raise RuntimeError(head.split(b"\r\n")[0].decode(errors="replace"))
-    return json.loads(body), elapsed_ms
 
 
 # ---------------------------------------------------------------- reporte
@@ -223,7 +148,14 @@ def main() -> None:
                 now, http_ms = fetch_metrics(args.port)
                 proc = read_proc(pid)
             except (OSError, ValueError, RuntimeError) as err:
-                print(f"{RED}sin respuesta del servidor: {err}{RESET}")
+                # /metrics necesita un descriptor libre para aceptar al monitor:
+                # si el servidor está en su tope de ulimit, esto es lo que se ve.
+                # /proc, en cambio, sigue respondiendo y dice si es por eso.
+                try:
+                    detail = f" (descriptores abiertos del servidor: {read_proc(pid)['fds']})"
+                except OSError:
+                    detail = " (el proceso ya no existe)"
+                print(f"{RED}sin respuesta del servidor: {err}{detail}{RESET}")
                 prev = prev_proc = None
                 time.sleep(args.interval)
                 continue
@@ -232,7 +164,7 @@ def main() -> None:
             if rows % HEADER_EVERY_ROWS == 0:
                 print(HEADER)
             line, alerts = build_row(now, prev, http_ms, proc, prev_proc,
-                                     count_close_wait(args.port), elapsed)
+                                     count_tcp(args.port, TCP_CLOSE_WAIT), elapsed)
             print(line)
             rows += 1
             alert_rows += bool(alerts)

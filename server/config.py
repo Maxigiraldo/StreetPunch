@@ -38,6 +38,17 @@ class Config:
     # ancho de banda sigan acotados.
     MAX_CONNECTIONS: int = 100
 
+    # Búfer de envío del kernel por conexión (SO_SNDBUF). Linux lo AUTOAJUSTA
+    # hasta ~2,6 MB (medido con `ss -tm`: tb=2626560): un cliente que no lee
+    # tardaría más de 10 minutos en llenarlo y recién entonces actuaría nuestro
+    # backpressure (buzón de 1 + WRITE_TIMEOUT_S); con 100 clientes serían hasta
+    # ~260 MB de memoria del kernel retenidos por conexiones zombi. Con 64 KB
+    # (Linux lo duplica) caben ~3 s de estado de un jugador (~20 KB/s con 12
+    # discos), de sobra para absorber un tropiezo de la red, y un cliente
+    # que no lee se detecta en decenas de segundos y no en minutos. Si el
+    # juego envía más datos por segundo, subirlo.
+    SEND_BUFFER_BYTES: int = 65536
+
     # Con el servidor lleno aún se contesta el saludo para decir "full" (1013),
     # pero cada contestación ocupa un descriptor hasta HANDSHAKE_TIMEOUT_S. Sin
     # tope, una avalancha de conexiones podría gastar todos los descriptores
@@ -108,6 +119,11 @@ class Config:
     # Cuántas duraciones de tick se guardan para calcular p50/p99: 300 ticks
     # son los últimos 10 s a 30 Hz, una ventana estable pero reciente.
     METRICS_TICK_WINDOW: int = 300
+
+    # Un error idéntico y repetitivo (p. ej. "sin descriptores" en el accept) se
+    # registra como mucho una vez cada tantos segundos. 5 s deja ver que sigue
+    # pasando sin inundar el log.
+    LOG_REPEAT_INTERVAL_S: float = 5.0
 
     # ------------------------------------------------------------------
     # Timeouts y apagado

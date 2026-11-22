@@ -23,6 +23,9 @@ class StuckWriter:
     def write(self, data: bytes) -> None:
         self.written.append(data)
 
+    def get_extra_info(self, name: str):
+        return None          # sin socket real: abort_with_reset solo llama a transport.abort()
+
     async def drain(self) -> None:
         await asyncio.Event().wait()
 
