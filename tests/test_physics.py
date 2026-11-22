@@ -59,6 +59,107 @@ def test_friccion_detiene_el_disco(physics):
     assert d.vel.length() < 1.0
 
 
+def test_por_encima_de_max_speed_frena_con_la_friccion_de_deslizar(physics):
+    """Una embestida o un golpe (velocidad > MAX_SPEED) pierde velocidad con
+    SLIDE_FRICTION_PER_S, no con la de caminar: por eso llega más lejos."""
+    d = Disc(1, Vec2(), vel=Vec2(CFG.DASH_MAX_SPEED, 0))
+    physics.step([d], DT)
+    assert d.vel.length() == pytest.approx(
+        CFG.DASH_MAX_SPEED * math.exp(-CFG.SLIDE_FRICTION_PER_S * DT))
+
+
+def test_a_velocidad_de_caminar_frena_con_la_friccion_normal(physics):
+    d = Disc(1, Vec2(), vel=Vec2(CFG.MAX_SPEED, 0))
+    physics.step([d], DT)
+    assert d.vel.length() == pytest.approx(
+        CFG.MAX_SPEED * math.exp(-CFG.FRICTION_PER_S * DT))
+
+
+def test_la_embestida_llega_mas_lejos_que_con_una_sola_friccion():
+    """Es el objetivo del cambio: con una fricción única (deslizar = caminar)
+    la misma embestida recorre bastante menos."""
+    import dataclasses
+
+    def reach(cfg: Config) -> float:
+        d = Disc(1, Vec2(), facing=Vec2(1, 0))
+        ph = Physics(cfg)
+        d.start_charge()
+        for _ in range(cfg.TICK_HZ):
+            ph.step([d], cfg.TICK_DT)
+        d.release_charge()
+        for _ in range(4 * cfg.TICK_HZ):
+            ph.step([d], cfg.TICK_DT)
+        return d.pos.x
+
+    uniform = dataclasses.replace(CFG, SLIDE_FRICTION_PER_S=CFG.FRICTION_PER_S)
+    assert reach(CFG) > 1.5 * reach(uniform)
+
+
+# ---------------- inmóvil al cargar ----------------
+
+def test_cargando_no_acelera_pero_si_apunta(physics):
+    """Mientras se carga, las teclas solo cambian hacia dónde apunta."""
+    d = Disc(1, Vec2(), facing=Vec2(1, 0))
+    d.start_charge()
+    d.set_move(Vec2(0, 1))            # pulsa "abajo" con la carga activa
+    run(physics, [d], CFG.TICK_HZ // 2)
+    assert d.pos.length() == 0.0       # no se movió
+    assert d.vel.length() == 0.0
+    assert d.facing == Vec2(0, 1)      # pero ahora apunta hacia abajo
+
+
+def test_la_embestida_sale_hacia_donde_se_apunto(physics):
+    d = Disc(1, Vec2(), facing=Vec2(1, 0))
+    d.start_charge()
+    d.set_move(Vec2(0, 1))
+    run(physics, [d], CFG.TICK_HZ // 2)
+    d.set_move(Vec2())                 # suelta las flechas: facing se conserva
+    d.release_charge()
+    physics.step([d], DT)
+    assert d.vel.x == pytest.approx(0.0, abs=1e-9)
+    assert d.vel.y > 0.0
+
+
+def test_al_soltar_la_carga_vuelve_a_caminar(physics):
+    d = Disc(1, Vec2())
+    d.start_charge()
+    d.set_move(Vec2(1, 0))
+    run(physics, [d], 5)
+    assert d.vel.length() == 0.0       # cargando: quieto
+    d.release_charge()
+    physics.step([d], DT)              # la suelta lanza la embestida
+    d.vel = Vec2()                     # se descarta el impulso: aquí solo importa caminar
+    run(physics, [d], 5)
+    assert d.vel.length() > 0.0        # ya no carga (en enfriamiento): vuelve a acelerar
+
+
+def test_en_enfriamiento_mantener_la_tecla_de_carga_no_inmoviliza(physics):
+    """Sin carga real (enfriamiento) no hay motivo para dejar al disco clavado."""
+    d = Disc(1, Vec2())
+    d.cooldown = CFG.DASH_COOLDOWN_S
+    d.start_charge()
+    d.set_move(Vec2(1, 0))
+    run(physics, [d], 5)
+    assert d.vel.length() > 0.0
+    assert d.charge_time == 0.0
+
+
+def test_un_golpe_si_mueve_a_un_disco_que_esta_cargando(physics):
+    """Estar inmóvil por cargar no lo hace inamovible: la colisión sí lo empuja."""
+    victim = Disc(2, Vec2(2 * CFG.DISC_RADIUS - 2, 0))
+    victim.start_charge()
+    hitter = Disc(1, Vec2(0, 0), vel=Vec2(CFG.MAX_SPEED, 0))
+    run(physics, [hitter, victim], 3)
+    assert victim.vel.x > 0.0
+
+
+def test_slide_friction_mayor_que_la_normal_es_invalida():
+    import dataclasses
+
+    with pytest.raises(ValueError, match="SLIDE_FRICTION_PER_S"):
+        dataclasses.replace(CFG, SLIDE_FRICTION_PER_S=CFG.FRICTION_PER_S + 1)
+
+
 # ---------------- embestida ----------------
 
 def charge_and_release(physics: Physics, d: Disc, ticks: int) -> None:

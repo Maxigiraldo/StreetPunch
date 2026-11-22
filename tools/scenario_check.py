@@ -160,13 +160,23 @@ def dist(a, b) -> float:
     return math.hypot(a[1] - b[1], a[2] - b[2])
 
 
-def peak_speed(samples: list[tuple[int, float]], dt: float) -> float:
-    """Velocidad máxima entre muestras consecutivas (tick, x).
+def rounding_tolerance(cfg: Config) -> float:
+    """Error máximo (px/s) al calcular velocidades con posiciones REDONDEADAS.
+
+    El servidor redondea las posiciones a POSITION_DECIMALS decimales en el
+    mensaje; dos muestras seguidas pueden diferir en un paso de redondeo de más
+    o de menos. A 170 px/s cada tick avanza 5,667 px y se ven pasos de 5,6 o 5,7
+    px: 168 o 171 px/s aunque la velocidad real sea exactamente 170."""
+    return 10 ** -cfg.POSITION_DECIMALS / cfg.TICK_DT
+
+
+def peak_speed(samples: list[tuple[int, float, float]], dt: float) -> float:
+    """Velocidad máxima entre muestras consecutivas (tick, x, y).
 
     Se divide por los ticks REALES que separan cada par: si el script se saltó
     estados, dividir siempre por un tick inflaría la velocidad."""
-    return max(abs(x1 - x0) / ((t1 - t0) * dt)
-               for (t0, x0), (t1, x1) in zip(samples, samples[1:]))
+    return max(math.hypot(x1 - x0, y1 - y0) / ((t1 - t0) * dt)
+               for (t0, x0, y0), (t1, x1, y1) in zip(samples, samples[1:]))
 
 
 class Report:
@@ -249,26 +259,38 @@ def round2(a: Client, cfg: Config, rep: Report, b: Client) -> None:
     track = [row(s, plus.id) for s in states if row(s, plus.id)]
     xs = [r[1] for r in track]
     dt = 1 / cfg.TICK_HZ
-    walk_peak = peak_speed([(s["tick"], row(s, plus.id)[1]) for s in states if row(s, plus.id)], dt)
+    walk_peak = peak_speed([(s["tick"], row(s, plus.id)[1], row(s, plus.id)[2])
+                            for s in states if row(s, plus.id)], dt)
     last_dead = track[-1]
-    rep.add(walk_peak <= cfg.MAX_SPEED + 1, "velocidad caminando <= MAX_SPEED",
-            f"pico={walk_peak:.1f} px/s  (MAX_SPEED={cfg.MAX_SPEED})")
+    tol = rounding_tolerance(cfg)
+    rep.add(walk_peak <= cfg.MAX_SPEED + tol, "velocidad caminando <= MAX_SPEED",
+            f"pico={walk_peak:.1f} px/s  (MAX_SPEED={cfg.MAX_SPEED}, tolerancia de redondeo ±{tol:.0f})")
     rep.add(math.hypot(last_dead[1], last_dead[2]) > cfg.ARENA_RADIUS
             and math.hypot(track[-2][1], track[-2][2]) <= cfg.ARENA_RADIUS,
             "cae justo al cruzar el borde",
             f"último estado vivo r={math.hypot(track[-2][1], track[-2][2]):.1f}, "
             f"primero muerto r={math.hypot(last_dead[1], last_dead[2]):.1f}  (borde={cfg.ARENA_RADIUS})")
+    # Estimación con la física de config: acelerar hasta MAX_SPEED y seguir a esa velocidad.
+    edge = cfg.ARENA_RADIUS - cfg.ARENA_RADIUS * cfg.SPAWN_RING_FRACTION
+    estimate = edge / cfg.MAX_SPEED + cfg.MAX_SPEED / (2 * cfg.ACCELERATION)
     rep.add(None, "tiempo hasta caer",
-            f"{len(xs) - 1} ticks = {(len(xs) - 1) * dt:.2f} s  (estimado a mano: ~0,6 s)")
+            f"{len(xs) - 1} ticks = {(len(xs) - 1) * dt:.2f} s  (estimado con config: {estimate:.2f} s)")
     collect(a, lambda s: s["phase"] == "round_over")
 
 
 def round3(a: Client, cfg: Config, rep: Report, b: Client) -> None:
-    print("\nRonda 3: carga, embestida y enfriamiento")
+    print("\nRonda 3: carga inmóvil, puntería, embestida y enfriamiento")
     playing = next_round_playing(a)
     plus, _ = sides(playing, a, b)
+    spawn = row(playing, plus.id)
     plus.send({"t": "charge", "on": True})
+    # Con la carga activa se pulsa una diagonal: no debe moverlo, solo apuntar
+    # (hacia el centro y hacia +y; el centro está a la izquierda del que nace en x>0).
+    plus.send({"t": "input", "dx": -1, "dy": 1})
     states = collect(a, lambda s: s["tick"] >= playing["tick"] + CHARGE_WINDOW_TICKS)
+    held = max(math.hypot(row(s, plus.id)[1] - spawn[1], row(s, plus.id)[2] - spawn[2]) for s in states)
+    rep.add(held <= FLOAT_TOLERANCE, "inmóvil mientras carga, aunque pulse una dirección",
+            f"desplazamiento máximo={held:.2f} px en {CHARGE_WINDOW_TICKS} ticks")
     cargas = [row(s, plus.id)[3] for s in states]
     rising = all(cargas[i] <= cargas[i + 1] + CARGA_TOLERANCE for i in range(len(cargas) - 1))
     full_at = next((i for i, c in enumerate(cargas) if c >= 1.0 - CARGA_TOLERANCE), None)
@@ -277,7 +299,9 @@ def round3(a: Client, cfg: Config, rep: Report, b: Client) -> None:
             "la carga sube hasta 1.0 en CHARGE_MAX_S",
             f"llega a 1.0 en el tick {full_at}  (esperado ~{expected})")
 
-    x0 = row(states[-1], plus.id)[1]
+    # Se sueltan las flechas (la puntería queda guardada en el servidor) y se lanza.
+    plus.send({"t": "input", "dx": 0, "dy": 0})
+    x0, y0 = row(states[-1], plus.id)[1], row(states[-1], plus.id)[2]
     release_tick = states[-1]["tick"]
     plus.send({"t": "charge", "on": False})
     pre = collect(a, lambda s: s["tick"] >= release_tick + 2)   # deja que el tick procese la suelta
@@ -285,19 +309,25 @@ def round3(a: Client, cfg: Config, rep: Report, b: Client) -> None:
     window = collect(a, lambda s: s["tick"] >= release_tick + DASH_WINDOW_TICKS)
     track = [row(s, plus.id) for s in window]
     dt = 1 / cfg.TICK_HZ
-    samples = [(states[-1]["tick"], x0)] + [(s["tick"], row(s, plus.id)[1]) for s in pre + window]
+    samples = [(states[-1]["tick"], x0, y0)] + [(s["tick"], row(s, plus.id)[1], row(s, plus.id)[2])
+                                               for s in pre + window]
     peak = peak_speed(samples, dt)
-    travelled = samples[-1][1] - x0
-    rep.add(cfg.MAX_SPEED < peak <= cfg.DASH_MAX_SPEED + 1, "la embestida supera la velocidad de caminar",
+    dx, dy = samples[-1][1] - x0, samples[-1][2] - y0
+    travelled = math.hypot(dx, dy)
+    rep.add(cfg.MAX_SPEED < peak <= cfg.DASH_MAX_SPEED + rounding_tolerance(cfg),
+            "la embestida supera la velocidad de caminar",
             f"pico={peak:.0f} px/s  (MAX_SPEED={cfg.MAX_SPEED}, DASH_MAX_SPEED={cfg.DASH_MAX_SPEED})")
-    rep.add(travelled < 0, "la embestida va hacia el centro", f"desplazamiento en x={travelled:.0f} px")
+    # La diagonal apuntada (-1,+1) debe dar un desplazamiento de ~45°: |dx| ≈ |dy|, dx<0, dy>0.
+    aimed = dx < 0 < dy and 0.8 <= abs(dy) / abs(dx) <= 1.25
+    rep.add(aimed, "la embestida sale hacia donde se apuntó",
+            f"desplazamiento=({dx:.0f}, {dy:.0f}) px  (esperado: dx<0, dy>0 y |dx|≈|dy|)")
     rep.add(max(r[3] for r in track) <= CARGA_TOLERANCE, "enfriamiento: no recarga",
             f"carga máxima en la ventana={max(r[3] for r in track)}  "
             f"(DASH_COOLDOWN_S={cfg.DASH_COOLDOWN_S} s)")
     gap = 2 * cfg.ARENA_RADIUS * cfg.SPAWN_RING_FRACTION - 2 * cfg.DISC_RADIUS
     rep.add(None, "alcance de una embestida desde la salida",
-            f"recorre ~{abs(travelled):.0f} px y la separación a cubrir es {gap:.0f} px "
-            f"-> {'alcanza' if abs(travelled) >= gap else 'NO alcanza al rival sin acercarse antes'}")
+            f"recorre ~{travelled:.0f} px en {DASH_WINDOW_TICKS} ticks y la separación a cubrir es "
+            f"{gap:.0f} px -> {'alcanza' if travelled >= gap else 'NO alcanza al rival sin acercarse antes'}")
 
 
 def main() -> int:

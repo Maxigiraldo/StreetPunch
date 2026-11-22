@@ -28,9 +28,15 @@ class Physics:
         5. Mover y, al final, resolver choques con las posiciones nuevas.
         """
         cfg = self._cfg
-        friction = math.exp(-cfg.FRICTION_PER_S * dt)
+        walk_friction = math.exp(-cfg.FRICTION_PER_S * dt)
+        slide_friction = math.exp(-cfg.SLIDE_FRICTION_PER_S * dt)
         for disc in discs:
-            disc.vel = disc.vel * friction
+            # Dos fricciones: al caminar frena rápido (control preciso); por
+            # encima de MAX_SPEED (embestida o golpe) frena menos, para que el
+            # impulso llegue lejos. Se decide por la velocidad al INICIO del
+            # tick, antes de aplicar nada: así el resultado no depende del orden.
+            sliding = disc.vel.length() > cfg.MAX_SPEED
+            disc.vel = disc.vel * (slide_friction if sliding else walk_friction)
             if disc.dashing and disc.vel.length() <= cfg.MAX_SPEED:
                 disc.dashing = False  # la embestida ya se frenó: vuelve a masa normal
             self._accelerate(disc, dt)
@@ -39,8 +45,19 @@ class Physics:
             disc.pos = disc.pos + disc.vel * dt
         self.resolve_collisions(discs)
 
+    @staticmethod
+    def _is_charging(disc: Disc) -> bool:
+        """Carga de verdad: tecla pulsada Y sin enfriamiento. En enfriamiento
+        mantener la tecla no carga nada, y entonces tampoco debe dejar al disco
+        clavado sin motivo."""
+        return disc.charging and disc.cooldown == 0.0
+
     def _accelerate(self, disc: Disc, dt: float) -> None:
-        if disc.move_dir.is_zero():
+        # Cargando, el disco no acelera: las teclas solo cambian hacia dónde
+        # apunta (Disc.facing, que ya actualiza set_move). La velocidad que
+        # traiga se pierde por fricción. Un golpe recibido sí lo mueve: eso
+        # lo hace la colisión, no esta aceleración.
+        if disc.move_dir.is_zero() or self._is_charging(disc):
             return
         new_vel = disc.vel + disc.move_dir * (self._cfg.ACCELERATION * dt)
         # Caminando no se pasa de MAX_SPEED; pero si el disco ya iba más
@@ -54,7 +71,7 @@ class Physics:
         cfg = self._cfg
         disc.cooldown = max(0.0, disc.cooldown - dt)
         # En enfriamiento se puede mantener la tecla, pero la carga no sube.
-        if disc.charging and disc.cooldown == 0.0:
+        if self._is_charging(disc):
             disc.charge_time = min(disc.charge_time + dt, cfg.CHARGE_MAX_S)
         if disc.release_pending:
             disc.release_pending = False

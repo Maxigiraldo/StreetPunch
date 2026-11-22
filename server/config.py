@@ -157,16 +157,29 @@ class Config:
     # hay espacio para moverse.
     DISC_RADIUS: float = 24.0
 
-    # Aceleración al mantener una dirección. Con MAX_SPEED de 240 se llega
+    # Aceleración al mantener una dirección. Con MAX_SPEED de 170 se llega
     # a la velocidad máxima en ~0,2 s: la respuesta se siente inmediata.
-    ACCELERATION: float = 1200.0
+    # Se bajó de 1200 a 850 junto con MAX_SPEED para conservar esos 0,2 s.
+    ACCELERATION: float = 850.0
 
-    # Velocidad máxima caminando (sin embestida).
-    MAX_SPEED: float = 240.0
+    # Velocidad máxima caminando (sin embestida). Se bajó de 240 a 170 (P5,
+    # tras jugar): caminar es solo posicionarse y la embestida es lo que
+    # decide la partida, así que no conviene que sea fácil perseguir al rival.
+    MAX_SPEED: float = 170.0
 
-    # Fricción: fracción de velocidad que se pierde por segundo (decaimiento
-    # exponencial). Con 4, sin tocar teclas el disco se detiene en ~1 s.
+    # Fricción al CAMINAR: fracción de velocidad que se pierde por segundo
+    # (decaimiento exponencial). Con 4, sin tocar teclas el disco se detiene
+    # en ~1 s: se controla con precisión.
     FRICTION_PER_S: float = 4.0
+
+    # Fricción cuando el disco va MÁS RÁPIDO que MAX_SPEED (embestida o golpe
+    # recibido). Es menor para que los impulsos lleguen lejos sin que caminar
+    # se sienta como hielo. Medido con Physics (embestida completa): con 4
+    # (igual que caminar) la embestida alcanzaba ~140 px y un rival golpeado
+    # se deslizaba ~115 px; con 2 alcanza ~250 px y el rival se desliza
+    # ~270 px, y caminar sigue deteniéndose en ~0,9 s. Debe ser <=
+    # FRICTION_PER_S (se valida abajo).
+    SLIDE_FRICTION_PER_S: float = 2.0
 
     # Velocidad de la embestida con carga completa; es proporcional a la
     # carga. También es el TOPE GLOBAL de velocidad: un choque elástico contra
@@ -232,6 +245,11 @@ class Config:
                 f">= radio del disco {self.DISC_RADIUS} px; baja DASH_MAX_SPEED "
                 f"o sube TICK_HZ"
             )
+
+        # Si deslizar frenara MÁS que caminar, un golpe duraría menos que un
+        # paso: lo contrario de lo que se busca.
+        if self.SLIDE_FRICTION_PER_S > self.FRICTION_PER_S:
+            errors.append("SLIDE_FRICTION_PER_S no puede superar FRICTION_PER_S")
 
         if self.TICK_HZ % self.SPECTATOR_HZ != 0:
             errors.append("SPECTATOR_HZ debe dividir exactamente a TICK_HZ")

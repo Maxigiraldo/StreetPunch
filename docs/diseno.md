@@ -49,8 +49,8 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 | RF-04 | Si un jugador se desconecta su disco desaparece; si queda uno solo, la ronda termina | N |
 | RF-05 | Fases: esperando (mín. 2), cuenta regresiva (3 s), jugando, fin, resultados (3 s) | N |
 | RF-06 | Marcador de rondas ganadas en memoria durante la sesión | N |
-| RF-07 | Movimiento con aceleración, fricción y velocidad máxima | N |
-| RF-08 | Embestida: se carga hasta 1 s y al soltar da un impulso proporcional; enfriamiento de 1,5 s | N |
+| RF-07 | Movimiento con aceleración, fricción y velocidad máxima; la fricción es menor por encima de esa velocidad (embestida y golpes) | N |
+| RF-08 | Embestida: se carga hasta 1 s y al soltar da un impulso proporcional; enfriamiento de 1,5 s. Mientras se carga el disco no se mueve y las flechas solo apuntan la embestida | N |
 | RF-09 | Colisiones elásticas; un disco en embestida empuja más | N |
 | RF-10 | Salir del borde elimina; pasa a espectador hasta el fin de la ronda | N |
 | RF-11 | Estado a 30 Hz para jugadores y 10 Hz para espectadores | N |
@@ -119,6 +119,7 @@ Todos van en `config.py`: cambiar uno no toca código, y cada cambio necesita su
 | Carga 1 s / enfriamiento 1,5 s | Jugabilidad | Se ajusta jugando |
 | Cuenta regresiva y resultados 3 s; nombre 16 car. | Comodidad | Se ajusta jugando |
 | Física (radio, velocidad, fricción) | Se fija el domingo | Siempre: desplazamiento por tick < radio, o hay tunneling |
+| Caminar 170 px/s con aceleración 850; fricción 4 al caminar y 2 por encima de esa velocidad | Ajustado en P5 jugando: caminar solo posiciona y la embestida decide. Medido con `Physics`: la embestida pasó de alcanzar ~140 px a ~250 px y un rival golpeado de deslizarse ~115 px a ~270 px; caminar se sigue deteniendo en ~0,9 s | Si la embestida resulta demasiado fuerte, subir `SLIDE_FRICTION_PER_S` hacia 3 |
 
 ## Fase 3: Diseño
 

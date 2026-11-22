@@ -14,6 +14,12 @@ const CHARGE_RING_GAP_PX = 5;      // separación entre el disco y su anillo de 
 const CHARGE_RING_WIDTH_PX = 4;    // grosor del anillo de carga
 const OWN_OUTLINE_PX = 3;          // borde blanco para reconocer el propio disco
 const DEAD_ALPHA = 0.25;           // discos eliminados: se dibujan apagados hasta fin de ronda
+const AIM_GAP_FACTOR = 1.15;       // la flecha de puntería nace un poco fuera del disco (en radios)
+const AIM_LENGTH_FACTOR = 2.2;     // y llega hasta esta distancia del centro (en radios)
+const AIM_WIDTH_PX = 3;            // grosor de la flecha
+const AIM_HEAD_PX = 9;             // largo de la punta
+const AIM_HEAD_HALF_WIDTH = 0.6;   // media base de la punta, como fracción de su largo
+const AIM_IDLE_ALPHA = 0.45;       // tenue mientras no se carga; opaca al cargar
 const MS_PER_S = 1000;             // `ms` del servidor -> segundos para mostrar
 // El estado no trae el color de los demás (solo el `welcome` trae el propio),
 // así que se deriva un tono estable del id. 47 es primo con 360: ids seguidos
@@ -132,6 +138,11 @@ const controls = {
   held: new Set(),                 // teclas de movimiento pulsadas ahora
   intent: { dx: 0, dy: 0 },        // última intención ENVIADA (para no repetirla)
   charging: false,                 // si la tecla de carga está pulsada
+  // Hacia dónde sale la embestida: la última dirección NO nula enviada, igual que
+  // Disc.facing en el servidor. null = no se ha pulsado nada esta ronda, y entonces
+  // el servidor apunta al centro de la arena. El servidor no manda su `facing`,
+  // así que el cliente lo reproduce con lo que él mismo envió (solo del propio disco).
+  aim: null,
 };
 
 function send(msg) {
@@ -158,6 +169,7 @@ function syncIntent() {
   const next = currentIntent();
   if (next.dx === controls.intent.dx && next.dy === controls.intent.dy) return;
   controls.intent = next;
+  if (next.dx !== 0 || next.dy !== 0) controls.aim = next; // soltar las teclas no cambia la puntería
   send({ t: "input", ...next });
 }
 
@@ -171,16 +183,25 @@ function resetControls() {
   controls.held.clear();
   controls.intent = { dx: 0, dy: 0 };
   controls.charging = false;
+  controls.aim = null;
 }
 
-// El servidor crea discos NUEVOS en cada ronda, con la dirección en cero. Si el
-// jugador sigue manteniendo una tecla de la ronda anterior, el cliente cree que
-// ya la envió y no la repetiría: se reenvía al empezar la fase de juego.
+// El servidor crea discos NUEVOS en cada ronda (al empezar la cuenta atrás), con
+// la dirección en cero y apuntando al centro. Por eso la puntería se olvida ahí.
+function newRound() {
+  controls.aim = null;
+}
+
+// Si el jugador sigue manteniendo una tecla de la ronda anterior, el cliente cree
+// que ya la envió y no la repetiría: se reenvía al empezar la fase de juego.
 function resyncControls() {
-  if (controls.intent.dx !== 0 || controls.intent.dy !== 0) send({ t: "input", ...controls.intent });
+  if (controls.intent.dx !== 0 || controls.intent.dy !== 0) {
+    send({ t: "input", ...controls.intent });
+    controls.aim = controls.intent;
+  }
   if (controls.charging) send({ t: "charge", on: true });
 }
-const phaseEntered = { playing: resyncControls };
+const phaseEntered = { countdown: newRound, playing: resyncControls };
 
 function isTyping(event) {
   return event.target instanceof HTMLInputElement;
@@ -256,6 +277,38 @@ function describeScores(state) {
     .join("   ");
 }
 
+// Flecha de puntería del PROPIO disco: hacia dónde saldría la embestida. Sin
+// dirección pulsada apunta al centro de la arena, como el servidor al empezar.
+function drawAim(px, py, worldX, worldY, r, charging) {
+  const aim = controls.aim ?? { dx: -worldX, dy: -worldY };
+  const length = Math.hypot(aim.dx, aim.dy);
+  if (length === 0) return; // disco exactamente en el centro y sin dirección: nada que dibujar
+  const ux = aim.dx / length;
+  const uy = aim.dy / length;
+  const fromX = px + ux * r * AIM_GAP_FACTOR;
+  const fromY = py + uy * r * AIM_GAP_FACTOR;
+  const toX = px + ux * r * AIM_LENGTH_FACTOR;
+  const toY = py + uy * r * AIM_LENGTH_FACTOR;
+
+  ctx.save();
+  ctx.globalAlpha = charging ? 1 : AIM_IDLE_ALPHA;
+  ctx.strokeStyle = "#fff";
+  ctx.fillStyle = "#fff";
+  ctx.lineWidth = AIM_WIDTH_PX;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+  // Punta: triángulo con la base perpendicular a la dirección (-uy, ux).
+  ctx.beginPath();
+  ctx.moveTo(toX + ux * AIM_HEAD_PX, toY + uy * AIM_HEAD_PX);
+  ctx.lineTo(toX - uy * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH, toY + ux * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH);
+  ctx.lineTo(toX + uy * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH, toY - ux * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function draw() {
   const { width, height } = els.canvas;
   const cx = width / 2;
@@ -288,6 +341,7 @@ function draw() {
       ctx.lineWidth = OWN_OUTLINE_PX;
       ctx.stroke();
     }
+    if (id === session.me && alive) drawAim(px, py, x, y, r, charge > 0);
     if (charge > 0) { // anillo que se completa cuando la carga llega a 1.0
       const start = -Math.PI / 2;
       ctx.beginPath();
