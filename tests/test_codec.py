@@ -7,7 +7,7 @@ import pytest
 
 from server.adapters.codec import JsonFrameEncoder, MessageError, game_codec, hello_codec
 from server.adapters.ws_frames import CloseCode
-from server.application.ports import DiscView, Snapshot, WelcomeInfo
+from server.application.ports import DiscView, RosterEntry, Snapshot, WelcomeInfo
 from server.config import Config
 from server.domain.commands import ChargeCommand, JoinCommand, MoveCommand
 
@@ -115,6 +115,13 @@ def test_welcome_formato():
     assert unframe(JsonFrameEncoder(CFG).encode_welcome(w)) == {
         "t": "welcome", "id": 7, "color": "#e4572e", "role": "spectator",
         "arena": {"radius": 300.0, "disc_radius": 24.0}}
+
+
+def test_roster_formato():
+    entries = (RosterEntry(7, "Ana", "#e4572e"), RosterEntry(9, "Luis", "#17bebb"))
+    assert unframe(JsonFrameEncoder(CFG).encode_roster(entries)) == {
+        "t": "roster", "players": [{"id": 7, "name": "Ana", "color": "#e4572e"},
+                                   {"id": 9, "name": "Luis", "color": "#17bebb"}]}
 
 
 def test_salida_es_trama_de_texto_sin_mascara():

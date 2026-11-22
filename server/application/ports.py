@@ -37,6 +37,13 @@ class WelcomeInfo:
     disc_radius: float
 
 
+@dataclass(frozen=True)
+class RosterEntry:
+    id: int
+    name: str
+    color: str
+
+
 class SnapshotObserver(ABC):
     """Quien recibe lo que publica el tick (patrón Observer).
 
@@ -51,6 +58,9 @@ class SnapshotObserver(ABC):
     @abstractmethod
     def on_welcome(self, data: bytes) -> None: ...
 
+    @abstractmethod
+    def on_roster(self, data: bytes) -> None: ...
+
 
 class SnapshotEncoder(ABC):
     """Convierte la foto a bytes listos para el cable. GameSession no sabe si
@@ -61,3 +71,6 @@ class SnapshotEncoder(ABC):
 
     @abstractmethod
     def encode_welcome(self, welcome: WelcomeInfo) -> bytes: ...
+
+    @abstractmethod
+    def encode_roster(self, entries: tuple[RosterEntry, ...]) -> bytes: ...

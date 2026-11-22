@@ -41,11 +41,11 @@ def test_dos_jugadores_reciben_estados_a_30hz():
 
             # Contar durante 1 s una vez que la ronda empezó (los dos juegan).
             loop = asyncio.get_running_loop()
-            while (await a.recv_json())["phase"] == "waiting":
+            while (await a.recv_state())["phase"] == "waiting":
                 pass
             ticks, end = [], loop.time() + 1.0
             while loop.time() < end:
-                msg = await a.recv_json()
+                msg = await a.recv_state()
                 ticks.append(msg["tick"])
             assert ticks == sorted(ticks) and len(set(ticks)) == len(ticks)
             assert 25 <= len(ticks) <= 33, len(ticks)
@@ -61,7 +61,7 @@ def test_input_mueve_el_disco_en_el_servidor():
             a.send_json({"t": "hello", "name": "Ana"})
             b.send_json({"t": "hello", "name": "Beto"})
             my_id = (await a.recv_json())["id"]
-            while (await a.recv_json())["phase"] != "playing":
+            while (await a.recv_state())["phase"] != "playing":
                 pass
             start = app.game.world.disc(my_id).pos
             a.send_json({"t": "input", "dx": 0, "dy": 1})
@@ -98,7 +98,7 @@ def test_json_malformado_error_y_1008():
             assert (await c.recv_json())["t"] == "welcome"
             c.send_frame(0x1, b"{roto")
             # Pueden llegar estados antes del error: se saltan.
-            while (msg := await c.recv_frame())[0] == 0x1 and json.loads(msg[1])["t"] == "state":
+            while (msg := await c.recv_frame())[0] == 0x1 and json.loads(msg[1])["t"] in ("state", "roster"):
                 pass
             assert json.loads(msg[1]) == {"t": "error", "code": "bad_message"}
             opcode, payload = await c.recv_frame()
@@ -171,4 +171,25 @@ def test_get_raiz_sirve_el_cliente():
             response = await r.read()
             assert response.startswith(b"HTTP/1.1 200 OK") and response.endswith(b"<h1>StreetPunch</h1>")
             w.close()
+    asyncio.run(go())
+
+
+def test_roster_por_el_cable_welcome_luego_roster_luego_state():
+    async def go():
+        async with running_server() as app:
+            a = await WsClient.connect(app.listener.port)
+            a.send_json({"t": "hello", "name": "Ana"})
+            kinds = [(await a.recv_json())["t"] for _ in range(3)]
+            assert kinds == ["welcome", "roster", "state"]
+
+            b = await WsClient.connect(app.listener.port)
+            b.send_json({"t": "hello", "name": "Beto"})
+            # El nuevo recibe la lista completa; el que ya estaba, la lista ampliada.
+            for client in (b, a):
+                while (msg := await client.recv_json())["t"] != "roster" or len(msg["players"]) < 2:
+                    pass
+                assert sorted(p["name"] for p in msg["players"]) == ["Ana", "Beto"]
+                assert all(p["color"].startswith("#") for p in msg["players"])
+            await a.close()
+            await b.close()
     asyncio.run(go())

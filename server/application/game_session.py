@@ -18,7 +18,7 @@ import logging
 from collections import deque
 
 from server.application.ports import (
-    DiscView, Snapshot, SnapshotEncoder, SnapshotObserver, WelcomeInfo,
+    DiscView, RosterEntry, Snapshot, SnapshotEncoder, SnapshotObserver, WelcomeInfo,
 )
 from server.application.send_policies import SendPolicy
 from server.application.session_commands import MembershipCommand
@@ -43,6 +43,8 @@ class GameSession:
         self._metrics = metrics
         self._tick = 0
         self._observers: dict[int, SnapshotObserver] = {}
+        # Verdadero si entró o salió alguien desde el último roster enviado.
+        self._roster_dirty = False
 
         # Cola productor-consumidor: N readers producen y el tick consume.
         # Acotada: si un cliente inunda, la memoria no crece; se descarta.
@@ -69,6 +71,7 @@ class GameSession:
 
     def subscribe(self, player_id: int, observer: SnapshotObserver) -> None:
         self._observers[player_id] = observer
+        self._roster_dirty = True
         player = self.world.players[player_id]
         welcome = WelcomeInfo(player.id, player.color, self.world.role_of(player_id),
                               self._cfg.ARENA_RADIUS, self._cfg.DISC_RADIUS)
@@ -78,6 +81,7 @@ class GameSession:
 
     def unsubscribe(self, player_id: int) -> None:
         self._observers.pop(player_id, None)
+        self._roster_dirty = True
 
     def stats(self) -> dict:
         """Lectura para /metrics. Solo lee y no hay await: ve un estado
@@ -98,7 +102,22 @@ class GameSession:
         self._apply_membership()
         self._apply_inputs()
         self._state = self._state.on_tick(self.world)
+        self._publish_roster_if_changed()
         self._publish()
+
+    def _publish_roster_if_changed(self) -> None:
+        """El roster (id, nombre, color de TODOS) solo se envía cuando alguien
+        entra o sale, no cada tick: nombres y colores no cambian durante la
+        sesión. Va a todos los observadores sin importar su política de
+        envío, y completo cada vez (un roster nuevo reemplaza al anterior, así
+        que si el buzón de un cliente lento pisa uno, no se pierde nada)."""
+        if not self._roster_dirty:
+            return
+        self._roster_dirty = False
+        entries = tuple(RosterEntry(p.id, p.name, p.color) for p in self.world.players.values())
+        data = self._encoder.encode_roster(entries)   # UNA vez, como el estado
+        for observer in self._observers.values():
+            self._notify(observer, observer.on_roster, data)
 
     def _apply_membership(self) -> None:
         while self._membership:

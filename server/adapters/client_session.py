@@ -55,6 +55,7 @@ class ClientSession(SnapshotObserver):
         self._event = asyncio.Event()
         self._mailbox: bytes | None = None
         self._welcome: bytes | None = None
+        self._roster: bytes | None = None
         self._pong: bytes | None = None
         self._close_frames: bytes | None = None
 
@@ -77,6 +78,12 @@ class ClientSession(SnapshotObserver):
 
     def on_welcome(self, data: bytes) -> None:
         self._welcome = data
+        self._event.set()
+
+    def on_roster(self, data: bytes) -> None:
+        # Una casilla: llega siempre la lista COMPLETA, así que la nueva
+        # reemplaza a la vieja sin perder información.
+        self._roster = data
         self._event.set()
 
     # ---------------- ciclo de vida ----------------
@@ -174,16 +181,17 @@ class ClientSession(SnapshotObserver):
             # Región crítica SIN await: tomar y vaciar las casillas. Nadie
             # puede intercalarse aquí, porque las otras tareas solo corren en
             # un await.
-            close, pong, welcome, state = self._close_frames, self._pong, self._welcome, self._mailbox
-            self._pong = self._welcome = self._mailbox = None
+            close, pong, welcome, roster, state = (
+                self._close_frames, self._pong, self._welcome, self._roster, self._mailbox)
+            self._pong = self._welcome = self._roster = self._mailbox = None
 
             if close is not None:
                 self._writer.write(close)
                 await self._writer.drain()
                 return
             # Prioridad: control, luego welcome (siempre antes del primer
-            # estado), luego estado. Cada trama ocupa UNA write().
-            for data in (pong, welcome, state):
+            # estado), luego roster (quién es quién), luego estado. Cada trama ocupa UNA write().
+            for data in (pong, welcome, roster, state):
                 if data is not None:
                     self._writer.write(data)
                     self._metrics.bytes_sent += len(data)

@@ -49,6 +49,7 @@ cliente                                servidor
   | <-- 101 Switching Protocols ----------- |
   | --- {"t":"hello","name":"Ana"} -------> |  JoinCommand -> cola de entradas
   | <-- {"t":"welcome",...} --------------- |  lo genera el tick (único escritor)
+  | <-- {"t":"roster",...} ---------------- |  quién es quién; se repite cuando alguien entra o sale
   | <-- {"t":"state",...} x 30 Hz -------- |  10 Hz si es espectador
   | --- {"t":"input",...} / charge ------> |
   | --- close ----------------------------> |  LeaveCommand; se libera el cupo
@@ -84,6 +85,19 @@ cliente                                servidor
 | `arena` | Geometría para dibujar |
 
 Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mismo tick en que ejecuta el `JoinCommand`, y el `writer` lo envía antes que el contenido del buzón.
+
+### `roster` (a todos, cuando alguien entra o sale)
+
+```json
+{"t":"roster","players":[{"id":7,"name":"Ana","color":"#e4572e"},{"id":9,"name":"Luis","color":"#17bebb"}]}
+```
+
+Lista **completa** de todos los conectados que ya hicieron `hello` (jugadores y espectadores). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
+
+- Lo genera el tick (único escritor) en el mismo tick en que ejecuta el `Connect` o el `Disconnect`, y lo recibe **todo** observador, también los espectadores (que reciben `state` a 10 Hz).
+- Orden garantizado para un cliente nuevo: `welcome`, `roster`, `state`.
+- Siempre va completo, así que uno nuevo reemplaza al anterior: si el buzón de un cliente lento pisa un roster, no se pierde información.
+- Un id que aparece en `state` y no en el `roster` (carrera de un tick) se dibuja sin nombre hasta que llegue el siguiente roster.
 
 ### `state` (cada tick, el mismo para todos)
 

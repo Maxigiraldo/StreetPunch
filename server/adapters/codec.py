@@ -17,7 +17,7 @@ import json
 from collections.abc import Callable
 
 from server.adapters.ws_frames import CloseCode, FrameWriter
-from server.application.ports import Snapshot, SnapshotEncoder, WelcomeInfo
+from server.application.ports import RosterEntry, Snapshot, SnapshotEncoder, WelcomeInfo
 from server.config import Config
 from server.domain.commands import ChargeCommand, Command, JoinCommand, MoveCommand
 
@@ -148,6 +148,10 @@ class JsonFrameEncoder(SnapshotEncoder):
             "t": "welcome", "id": w.id, "color": w.color, "role": w.role,
             "arena": {"radius": w.arena_radius, "disc_radius": w.disc_radius},
         })
+
+    def encode_roster(self, entries: tuple[RosterEntry, ...]) -> bytes:
+        return self._frame({"t": "roster", "players": [
+            {"id": e.id, "name": e.name, "color": e.color} for e in entries]})
 
     def encode_error(self, code: str) -> bytes:
         return self._frame({"t": "error", "code": code})

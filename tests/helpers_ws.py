@@ -62,6 +62,12 @@ class WsClient:
         assert opcode == 0x1, (opcode, payload)
         return json.loads(payload)
 
+    async def recv_state(self) -> dict:
+        """Siguiente `state`, saltando welcome y roster (que llegan antes)."""
+        while (msg := await self.recv_json())["t"] != "state":
+            pass
+        return msg
+
     async def close(self) -> None:
         self.writer.close()
         try:

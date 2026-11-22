@@ -1,9 +1,9 @@
 "use strict";
 /*
- * Cliente de StreetPunch (P5a dibujo + P5b teclado).
+ * Cliente de StreetPunch (P5a dibujo, P5b teclado, P5c interpolación, P5d pantalla).
  *
- * - Abre el WebSocket, manda `hello` y dibuja cada `state` tal como llega
- *   (sin interpolar: eso es P5c).
+ * - Abre el WebSocket, manda `hello` y dibuja los `state` interpolados (~100 ms
+ *   en el pasado). El `roster` da nombre y color a cada id.
  * - Envía INTENCIONES (hacia dónde quiere moverse, si carga), nunca posiciones:
  *   el servidor es la autoridad (docs/protocolo.md).
  */
@@ -21,13 +21,22 @@ const AIM_HEAD_PX = 9;             // largo de la punta
 const AIM_HEAD_HALF_WIDTH = 0.6;   // media base de la punta, como fracción de su largo
 const AIM_IDLE_ALPHA = 0.45;       // tenue mientras no se carga; opaca al cargar
 const MS_PER_S = 1000;             // `ms` del servidor -> segundos para mostrar
-// El estado no trae el color de los demás (solo el `welcome` trae el propio),
-// así que se deriva un tono estable del id. 47 es primo con 360: ids seguidos
-// quedan bien separados en la rueda de color.
-const HUE_STEP_DEG = 47;
-const FULL_TURN_DEG = 360;
-const OTHER_DISC_SATURATION = "70%";
-const OTHER_DISC_LIGHTNESS = "55%";
+// Color de un disco cuyo id aún no está en el `roster` (el roster llega en el mismo
+// tick en que entra el jugador, pero un `state` puede adelantarse): gris neutro.
+const UNKNOWN_COLOR = "#8a8f98";
+
+// ---- Texto sobre el canvas (P5d) ----
+const NAME_FONT = "600 13px system-ui, sans-serif";
+const NAME_GAP_PX = 8;             // separación entre el borde del disco y su nombre
+const NAME_OUTLINE_PX = 3;         // contorno oscuro: el nombre se lee sobre cualquier color
+const BIG_FONT = "700 72px system-ui, sans-serif";
+const MID_FONT = "700 34px system-ui, sans-serif";
+const SMALL_FONT = "500 18px system-ui, sans-serif";
+const OVERLAY_LINE_GAP_PX = 44;    // separación entre el texto grande y el pequeño
+const BANNER_TOP_PX = 34;          // el aviso de espectador va arriba del canvas
+const OVERLAY_COLOR = "#ffffff";
+const OVERLAY_SHADOW = "#000000";
+const SPECTATOR_HINT = "Eres espectador: entras en la próxima ronda";
 
 // ---- Interpolación (P5c) ----
 const INTERP_DELAY_MS = 100;       // se dibuja ~100 ms en el pasado (docs/diseno.md, P5)
@@ -45,6 +54,7 @@ const PHASE_TEXT = {
   playing: "¡A pelear!",
   round_over: "Fin de la ronda",
 };
+const STATUS_TEXT = { playing: "en juego", eliminated: "eliminado", spectator: "espectador" };
 
 const els = {
   form: document.getElementById("join"),
@@ -58,7 +68,10 @@ const els = {
 const ctx = els.canvas.getContext("2d");
 
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
-const session = { socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null };
+const session = {
+  socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null,
+  roster: new Map(),   // id -> { name, color }, tal como lo manda el servidor
+};
 
 // Estados recibidos con su hora de LLEGADA (performance.now), para dibujar en el pasado.
 // Se usa la hora de llegada y no el `tick` porque el cliente no conoce TICK_HZ.
@@ -131,6 +144,10 @@ const handlers = {
     session.arena = msg.arena;
     setStatus(`Conectado como #${msg.id}`);
   },
+  roster(msg) {
+    // Siempre llega la lista completa: se reemplaza entera, no se mezcla.
+    session.roster = new Map(msg.players.map((p) => [p.id, { name: p.name, color: p.color }]));
+  },
   state(msg) {
     // Solo importa el más reciente: cada `state` se basta a sí mismo
     // (docs/protocolo.md §4), así que descartar los intermedios no pierde nada.
@@ -166,6 +183,7 @@ function connect(name) {
   session.latest = null;
   session.phase = null;
   session.arena = DEFAULT_ARENA;
+  session.roster = new Map();
   resetTimeline();
   resetControls();
   els.enter.disabled = true;
@@ -323,27 +341,103 @@ function setStatus(text) {
 }
 
 function discColor(id) {
-  if (id === session.me && session.color) return session.color;
-  const hue = (id * HUE_STEP_DEG) % FULL_TURN_DEG;
-  return `hsl(${hue} ${OTHER_DISC_SATURATION} ${OTHER_DISC_LIGHTNESS})`;
+  return session.roster.get(id)?.color ?? UNKNOWN_COLOR;
+}
+
+function nameOf(id) {
+  return session.roster.get(id)?.name ?? `#${id}`;
+}
+
+// Se juega si el propio id aparece en `d`; si no, se es espectador (docs/protocolo.md §4).
+function amPlaying(state) {
+  return state.d.some((disc) => disc[0] === session.me);
 }
 
 function describe(state) {
   const parts = [PHASE_TEXT[state.phase] ?? state.phase];
   if (state.ms !== null) parts.push(String(Math.ceil(state.ms / MS_PER_S)));
-  if (state.winner !== null) {
-    parts.push(state.winner === session.me ? "— ¡ganaste!" : `— ganó #${state.winner}`);
-  }
-  // Se juega si el propio id aparece en `d`; si no, se es espectador (docs/protocolo.md §4).
-  const playing = state.d.some((disc) => disc[0] === session.me);
-  parts.push(playing ? "(juegas)" : "(espectador)");
   return parts.join(" ");
 }
 
-function describeScores(state) {
-  return Object.entries(state.scores)
-    .map(([id, wins]) => `${Number(id) === session.me ? "tú" : "#" + id}: ${wins}`)
-    .join("   ");
+// Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño].
+// Registro por fase (como `handlers`): una fase nueva es una entrada nueva.
+const overlayFor = {
+  waiting: () => ["Esperando jugadores…", "Se empieza cuando haya rivales"],
+  countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!"],
+  round_over: (state) => {
+    if (state.winner === null) return ["Empate", "Nadie ganó la ronda"];
+    return state.winner === session.me
+      ? ["¡Ganaste!", "Siguiente ronda en breve"]
+      : [`Ganó ${nameOf(state.winner)}`, "Siguiente ronda en breve"];
+  },
+};
+
+// Filas del marcador: todos los del roster, con sus victorias y su estado en esta ronda.
+// Más victorias primero; a igualdad, el orden del roster (el de llegada).
+function scoreRows(state) {
+  const inRound = new Map(state.d.map((disc) => [disc[0], disc[4]]));
+  const rows = [...session.roster].map(([id, info]) => ({
+    id,
+    name: info.name,
+    color: info.color,
+    wins: state.scores[id] ?? 0,
+    status: !inRound.has(id) ? "spectator" : inRound.get(id) ? "playing" : "eliminated",
+    me: id === session.me,
+  }));
+  return rows.sort((a, b) => b.wins - a.wins);
+}
+
+// El marcador es DOM y solo se reconstruye si su contenido cambió: no a 30 Hz.
+// Los nombres los eligen otros jugadores: se escriben con textContent, nunca como HTML.
+let lastScoreKey = "";
+function renderScores(state) {
+  const rows = scoreRows(state);
+  const key = JSON.stringify(rows);
+  if (key === lastScoreKey) return;
+  lastScoreKey = key;
+  els.scores.replaceChildren(...rows.map((row) => {
+    const item = document.createElement("li");
+    item.className = `row ${row.status}${row.me ? " me" : ""}`;
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = row.color;
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = row.me ? `${row.name} (tú)` : row.name;
+    const wins = document.createElement("span");
+    wins.className = "wins";
+    wins.textContent = String(row.wins);
+    const status = document.createElement("span");
+    status.className = "status";
+    status.textContent = STATUS_TEXT[row.status];
+    item.append(swatch, name, wins, status);
+    return item;
+  }));
+}
+
+// Texto con contorno oscuro: legible sobre la arena, los discos y el fondo.
+function drawText(text, x, y, font, color = OVERLAY_COLOR) {
+  ctx.font = font;
+  ctx.lineJoin = "round";
+  ctx.lineWidth = NAME_OUTLINE_PX;
+  ctx.strokeStyle = OVERLAY_SHADOW;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function drawOverlay(state, cx, cy) {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (Object.hasOwn(overlayFor, state.phase)) {
+    const [big, small] = overlayFor[state.phase](state);
+    drawText(big, cx, cy, state.phase === "countdown" ? BIG_FONT : MID_FONT);
+    drawText(small, cx, cy + OVERLAY_LINE_GAP_PX, SMALL_FONT);
+  }
+  // En `waiting` aún no hay ronda de la que quedarse fuera: el aviso sería ruido.
+  if (session.me !== null && state.phase !== "waiting" && !amPlaying(state)) {
+    drawText(SPECTATOR_HINT, cx, BANNER_TOP_PX, SMALL_FONT);
+  }
 }
 
 // Flecha de puntería del PROPIO disco: hacia dónde saldría la embestida. Sin
@@ -420,7 +514,11 @@ function draw(now) {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    drawText(nameOf(id), px, py - r - NAME_GAP_PX - (charge > 0 ? CHARGE_RING_GAP_PX + CHARGE_RING_WIDTH_PX : 0), NAME_FONT);
   }
+  drawOverlay(session.latest, cx, cy);
 }
 
 // Se dibuja al ritmo de la pantalla, no al de los mensajes. El texto (DOM) solo
@@ -432,7 +530,7 @@ function frame(now) { // `now`: la hora del fotograma, en el mismo reloj que per
   if (state && state.tick !== lastHudTick) {
     lastHudTick = state.tick;
     els.hud.textContent = describe(state);
-    els.scores.textContent = describeScores(state);
+    renderScores(state);
   }
   requestAnimationFrame(frame);
 }

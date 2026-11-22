@@ -31,10 +31,17 @@ class FakeEncoder(SnapshotEncoder):
     def encode_welcome(self, welcome: WelcomeInfo) -> bytes:
         return f"welcome:{welcome.id}".encode()
 
+    def encode_roster(self, entries) -> bytes:
+        return ("roster:" + ",".join(f"{e.id}={e.name}" for e in entries)).encode()
+
 
 class FakeObserver(SnapshotObserver):
     def __init__(self) -> None:
         self.received: list[bytes] = []
+        self.rosters: list[bytes] = []
+
+    def on_roster(self, data: bytes) -> None:
+        self.rosters.append(data)
 
     def on_snapshot(self, data: bytes) -> None:
         self.received.append(data)
@@ -44,6 +51,9 @@ class FakeObserver(SnapshotObserver):
 
 
 class BrokenObserver(SnapshotObserver):
+    def on_roster(self, data: bytes) -> None:
+        raise RuntimeError("socket roto")
+
     def on_snapshot(self, data: bytes) -> None:
         raise RuntimeError("socket roto")
 
@@ -151,3 +161,41 @@ def test_observador_roto_no_detiene_a_los_demas():
     for _ in range(5):
         game.tick()
     assert len(good.received) >= 5
+
+
+# ---------------- roster (quién es quién) ----------------
+
+def test_roster_llega_a_todos_cuando_entra_alguien_incluido_el_nuevo():
+    game, _, _ = make()
+    a = connect(game, 1)
+    game.tick()
+    b = connect(game, 2)
+    game.tick()
+    assert a.rosters == [b"roster:1=p1", b"roster:1=p1,2=p2"]
+    assert b.rosters == [b"roster:1=p1,2=p2"]     # el nuevo recibe la lista completa
+
+
+def test_roster_no_se_repite_si_nadie_entra_ni_sale():
+    game, _, _ = make()
+    obs = connect(game, 1)
+    for _ in range(10):
+        game.tick()
+    assert len(obs.rosters) == 1
+
+
+def test_roster_llega_tambien_a_espectadores_a_pesar_de_su_politica_10hz():
+    game, _, _ = make()
+    connect(game, 1), connect(game, 2)
+    game.tick()                       # empieza la ronda: 1 y 2 juegan
+    spectator = connect(game, 3)
+    game.tick()                       # puede no tocarle estado en este tick; el roster sí
+    assert spectator.rosters == [b"roster:1=p1,2=p2,3=p3"]
+
+
+def test_roster_al_salir_alguien_ya_no_lo_incluye():
+    game, _, _ = make()
+    a, b = connect(game, 1), connect(game, 2)
+    game.tick()
+    game.submit_membership(Disconnect(2))
+    game.tick()
+    assert a.rosters[-1] == b"roster:1=p1"
