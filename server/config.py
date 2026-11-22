@@ -94,6 +94,15 @@ class Config:
     # Longitud máxima del nombre. Cabe sobre el disco en el canvas.
     MAX_NAME_LEN: int = 16
 
+    # Decimales al codificar el estado. Una décima de píxel es invisible y
+    # cada dígito de más son bytes x discos x 30 Hz x clientes.
+    POSITION_DECIMALS: int = 1
+    CHARGE_DECIMALS: int = 2
+
+    # Cuántas duraciones de tick se guardan para calcular p50/p99: 300 ticks
+    # son los últimos 10 s a 30 Hz, una ventana estable pero reciente.
+    METRICS_TICK_WINDOW: int = 300
+
     # ------------------------------------------------------------------
     # Timeouts y apagado
     # ------------------------------------------------------------------

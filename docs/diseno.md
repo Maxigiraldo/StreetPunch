@@ -139,7 +139,7 @@ Las dependencias siempre apuntan hacia adentro. Esto permite probar el juego con
 | --- | --- | --- |
 | `accept_loop` | 1 | Acepta, reserva un cupo del semáforo y lanza la sesión; captura `OSError` (EMFILE) sin caerse |
 | `reader` | 1 por cliente | Arma tramas, decodifica comandos y hace `put_nowait` en la cola de entradas; deja pong y close en la `control_queue` |
-| `writer` | 1 por cliente | Único que escribe en el socket: primero la `control_queue`, luego el `welcome` pendiente, luego el buzón; `drain` con timeout de 10 s |
+| `writer` | 1 por cliente | Único que escribe en el socket: primero el control (close, pong), luego el `welcome` pendiente, luego el buzón; `drain` con timeout de 10 s |
 | `tick_loop` | 1 | Único escritor del estado: vacía la cola, ejecuta comandos, física, fase, codifica el estado a `bytes` una vez y lo publica |
 
 ### Recursos compartidos
@@ -149,12 +149,13 @@ La prueba para cada uno: ¿hay un `await` entre leer y modificar? Si no lo hay, 
 | Recurso | Quién escribe / lee | Protección |
 | --- | --- | --- |
 | Cola de entradas | N `reader` / el tick | `asyncio.Queue(1024)` con `put_nowait`; llena = descartar y contar |
+| Cola de membresía (`Connect` / `Disconnect`) | N `ClientSession` / el tick | `deque` que **nunca** descarta: perder un `Disconnect` dejaría un jugador fantasma y una sesión sin liberar. Acotada por el semáforo (≤ 2 por conexión) |
 | Estado del juego y registro de jugadores | Solo el tick | Único escritor: entradas y salidas son `JoinCommand` / `LeaveCommand` |
 | Lista de observadores | Solo el tick | Igual: suscribirse y darse de baja solo vía comandos |
-| Socket de cada cliente | Solo su `writer` | `reader` usa la `control_queue`; nunca dos escritores ni dos `drain` |
+| Socket de cada cliente | Solo su `writer` | `reader` deja pong y close en casillas de control (la `control_queue`, acotada a una casilla por tipo; el RFC permite contestar solo el ping más reciente); nunca dos escritores ni dos `drain` |
 | Buzón de cada cliente | Tick / su `writer` | Región crítica sin `await` + `asyncio.Event`; orden: `wait()`, `clear()`, leer |
 | `welcome` pendiente de cada cliente | Tick (vía `on_welcome`) / su `writer` | Igual que el buzón: casilla escrita sin `await` y el mismo `asyncio.Event` |
-| Política de envío de cada cliente | Solo el tick | Cambia de `EveryNthTick` a `EveryTick` cuando un espectador entra a la ronda, siempre dentro del tick |
+| Política de envío de cada cliente | Solo el tick | `GameSession` la elige en cada tick con un registro `{rol: SendPolicy}`; un espectador que entra a la ronda pasa solo a 30 Hz |
 | Estado publicado | Tick / todos los `writer` | `bytes` inmutables, codificados una sola vez por tick |
 | Cupos de conexión | `accept_loop` / cierre | `asyncio.Semaphore(100)`, liberado en `finally` |
 | Contadores de métricas y de entradas por tick | Varias tareas | Incremento sin `await` en medio: atómico en un solo hilo |

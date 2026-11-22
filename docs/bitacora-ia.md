@@ -111,3 +111,29 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
   La prueba ahora se parametriza con `read_chunk` en `[1, len(HUGE)]`, uno por cada camino.
 - **Por qué es un error:** es la misma falsa suposición que castiga la rúbrica (criterio 2), pero al revés: el código suponía cómo iban a llegar los bytes. TCP no garantiza nada sobre el tamaño de cada `read()`, así que un límite de seguridad tiene que valer para cualquier partición del flujo.
 - **Cómo se verificó:** con mutación. Volví a poner la condición vieja (`if end == -1 and len(buf) > max_bytes`). Con la prueba vieja, todo seguía en verde. Con la nueva, falla `test_cabecera_demasiado_grande_431[8225]`, el caso de un solo `read()`.
+
+### 4. `start_server(sock=...)` pisaba el `listen(128)` hecho a mano
+
+- **Fecha y paso:** 2026-11-21 · P4
+- **Detectado por:** la IA, al revisar `ss -tlnp` con el servidor real corriendo.
+- **Prompt:**
+  > "Confirmo" (arrancar P4: listener, sesiones y tick).
+- **Qué generó la IA:** en `server/adapters/listener.py`:
+  ```python
+  sock.listen(backlog)          # en create_listen_socket, con LISTEN_BACKLOG = 128
+  ...
+  server = await asyncio.start_server(self._on_connect, sock=self._sock)
+  ```
+- **Problema (categoría: sockets):** `start_server` (o sea `loop.create_server`) tiene su propio parámetro `backlog`, que por defecto vale 100, y **vuelve a llamar a `sock.listen(100)`** sobre el socket que le entregamos. El `listen(128)` manual quedaba sobrescrito sin ningún error ni aviso.
+  ```
+  $ ss -tlnp | grep 8080
+  LISTEN 0      100         127.0.0.1:8080  ...     ← Send-Q de un socket LISTEN = backlog
+  ```
+- **Corrección:**
+  ```diff
+  -server = await asyncio.start_server(self._on_connect, sock=self._sock)
+  +server = await asyncio.start_server(self._on_connect, sock=self._sock,
+  +                                    backlog=self._cfg.LISTEN_BACKLOG)
+  ```
+- **Por qué es un error:** la cola de aceptación (conexiones que ya completaron el saludo TCP y esperan su `accept()`) era más chica de lo configurado y justificado. En una ráfaga de 100+ bots conectando a la vez, el kernel descartaría SYN antes de lo previsto. Peor aún, el valor de `config.py` mentía: decía 128 y el kernel usaba 100. Es la clase de detalle que esconde un framework, y justo la razón por la que el proyecto crea el socket a mano.
+- **Cómo se verificó:** con `ss -tlnp` antes (Send-Q = 100) y después (Send-Q = 128), con el servidor real (`.venv/bin/python -m server.main`).

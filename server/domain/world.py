@@ -13,6 +13,10 @@ from server.domain.arena import Arena
 from server.domain.disc import Disc
 
 
+ROLE_PLAYER = "player"
+ROLE_SPECTATOR = "spectator"
+
+
 @dataclass(frozen=True)
 class Player:
     id: int
@@ -54,6 +58,11 @@ class World:
     def is_playing(self, player_id: int) -> bool:
         """Jugador activo en la ronda actual (recibe a 30 Hz)."""
         return player_id in self.discs
+
+    def role_of(self, player_id: int) -> str:
+        """Rol con los nombres del protocolo; la aplicación lo usa como clave
+        del registro de políticas de envío."""
+        return ROLE_PLAYER if self.is_playing(player_id) else ROLE_SPECTATOR
 
     # ---------------- ronda ----------------
 

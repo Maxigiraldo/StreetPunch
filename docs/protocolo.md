@@ -60,7 +60,7 @@ cliente                                servidor
 | `t` | Campos | Ejemplo | Validación |
 | --- | --- | --- | --- |
 | `hello` | `name`: string | `{"t":"hello","name":"Ana"}` | Solo una vez. Tras quitar espacios, entre 1 y `MAX_NAME_LEN` (16) caracteres. Si no, `bad_name` |
-| `input` | `dx`, `dy`: entero en {-1, 0, 1}; `seq`: entero ≥ 0 (opcional) | `{"t":"input","dx":1,"dy":-1,"seq":42}` | Fuera de rango → `bad_message` |
+| `input` | `dx`, `dy`: entero en {-1, 0, 1} (no booleano) | `{"t":"input","dx":1,"dy":-1}` | Fuera de rango → `bad_message` |
 | `charge` | `on`: booleano | `{"t":"charge","on":true}` | `true` empieza a cargar y `false` suelta la embestida. Si no es booleano → `bad_message` |
 
 - Los campos desconocidos se **ignoran**. Si un cliente manda `x`/`y`, el servidor ni los lee.
@@ -79,7 +79,7 @@ cliente                                servidor
 | --- | --- |
 | `id` | Identificador del cliente durante la sesión |
 | `color` | Color asignado a su disco |
-| `role` | `"player"` o `"spectator"` en el momento de entrar |
+| `role` | `"player"` o `"spectator"` en el momento de entrar. Como nadie entra a mitad de ronda, al llegar siempre es `"spectator"`; el rol real se deduce de si el `id` aparece en `d` |
 | `arena` | Geometría para dibujar |
 
 Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mismo tick en que ejecuta el `JoinCommand`, y el `writer` lo envía antes que el contenido del buzón.
@@ -130,6 +130,6 @@ Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mi
 | 1009 | Trama mayor que `MAX_FRAME_BYTES` |
 | 1013 | Servidor lleno |
 
-## 6. Pendiente
+## 6. Latencia
 
-- **`seq` en `input`.** El diseño dice que `seq` "mide latencia", pero para eso el servidor tendría que devolverle a cada cliente su último `seq` procesado. Eso no cabe en `state`, porque `state` es un solo `bytes` para todos. Hay que decidirlo antes de P4: o se quita `seq`, o la latencia se mide con el RTT de ping/pong.
+No hay número de secuencia en `input`: `state` es un único `bytes` compartido por todos, así que no puede devolverle a cada cliente "tu último `seq`". La latencia se mide con el RTT de ping/pong del propio WebSocket (P6/P7).
