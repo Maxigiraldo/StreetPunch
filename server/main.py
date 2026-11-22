@@ -71,7 +71,7 @@ def build(config: Config, static: dict[str, StaticFile]) -> App:
     """Arma el grafo de objetos (inversión de dependencias): cada clase recibe
     lo que necesita por constructor y no sabe quién lo creó."""
     metrics = Metrics(config.METRICS_TICK_WINDOW)
-    world = World(config, Arena(config.ARENA_RADIUS))
+    world = World(config, Arena(config.ARENA_RADIUS, config.DISC_RADIUS * config.ELIMINATION_MARGIN_DISCS))
     initial = Waiting(RoundContext(config, Physics(config)))
     encoder = JsonFrameEncoder(config)
     policies = {

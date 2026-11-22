@@ -11,13 +11,16 @@ from server.domain.vector import Vec2
 
 
 class Arena:
-    def __init__(self, radius: float) -> None:
-        self.radius = radius
+    def __init__(self, radius: float, fall_margin: float = 0.0) -> None:
+        self.radius = radius                      # el borde que se dibuja
+        self.fall_margin = fall_margin            # cuánto más allá del borde aún no se cae
+        self.elimination_radius = radius + fall_margin
 
     def contains(self, disc: Disc) -> bool:
-        """Un disco sigue en la arena mientras su CENTRO esté dentro: puede
-        quedar medio colgando del borde y todavía salvarse."""
-        return disc.pos.length() <= self.radius
+        """Un disco sigue en juego mientras su CENTRO esté dentro del radio de
+        eliminación (borde + margen): puede quedar colgando del borde, incluso
+        con el disco casi entero fuera, y todavía salvarse."""
+        return disc.pos.length() <= self.elimination_radius
 
     def spawn_points(self, n: int, ring_fraction: float) -> list[Vec2]:
         """n posiciones repartidas por igual en un círculo concéntrico."""

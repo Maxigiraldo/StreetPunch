@@ -265,13 +265,14 @@ def round2(a: Client, cfg: Config, rep: Report, b: Client) -> None:
     tol = rounding_tolerance(cfg)
     rep.add(walk_peak <= cfg.MAX_SPEED + tol, "velocidad caminando <= MAX_SPEED",
             f"pico={walk_peak:.1f} px/s  (MAX_SPEED={cfg.MAX_SPEED}, tolerancia de redondeo ±{tol:.0f})")
-    rep.add(math.hypot(last_dead[1], last_dead[2]) > cfg.ARENA_RADIUS
-            and math.hypot(track[-2][1], track[-2][2]) <= cfg.ARENA_RADIUS,
-            "cae justo al cruzar el borde",
+    limit = cfg.ARENA_RADIUS + cfg.DISC_RADIUS * cfg.ELIMINATION_MARGIN_DISCS
+    rep.add(math.hypot(last_dead[1], last_dead[2]) > limit
+            and math.hypot(track[-2][1], track[-2][2]) <= limit,
+            "cae justo al cruzar el borde más el margen de caída",
             f"último estado vivo r={math.hypot(track[-2][1], track[-2][2]):.1f}, "
-            f"primero muerto r={math.hypot(last_dead[1], last_dead[2]):.1f}  (borde={cfg.ARENA_RADIUS})")
+            f"primero muerto r={math.hypot(last_dead[1], last_dead[2]):.1f}  (borde={cfg.ARENA_RADIUS}, cae a partir de {limit:.0f})")
     # Estimación con la física de config: acelerar hasta MAX_SPEED y seguir a esa velocidad.
-    edge = cfg.ARENA_RADIUS - cfg.ARENA_RADIUS * cfg.SPAWN_RING_FRACTION
+    edge = limit - cfg.ARENA_RADIUS * cfg.SPAWN_RING_FRACTION
     estimate = edge / cfg.MAX_SPEED + cfg.MAX_SPEED / (2 * cfg.ACCELERATION)
     rep.add(None, "tiempo hasta caer",
             f"{len(xs) - 1} ticks = {(len(xs) - 1) * dt:.2f} s  (estimado con config: {estimate:.2f} s)")

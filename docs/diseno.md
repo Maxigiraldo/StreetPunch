@@ -52,7 +52,7 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 | RF-07 | Movimiento con aceleración, fricción y velocidad máxima; la fricción es menor por encima de esa velocidad (embestida y golpes) | N |
 | RF-08 | Embestida: se carga hasta 1 s y al soltar da un impulso proporcional; enfriamiento de 1,5 s. Mientras se carga el disco no se mueve y las flechas solo apuntan la embestida | N |
 | RF-09 | Colisiones elásticas; un disco en embestida empuja más | N |
-| RF-10 | Salir del borde elimina; pasa a espectador hasta el fin de la ronda | N |
+| RF-10 | Salir del borde elimina; pasa a espectador hasta el fin de la ronda. Se elimina cuando el centro pasa del borde + `ELIMINATION_MARGIN_DISCS` radios (1.0: disco entero fuera) | N |
 | RF-11 | Estado a 30 Hz para jugadores y 10 Hz para espectadores | N |
 | RF-12 | Cliente con `canvas`, interpolación, nombres, carga, fase y marcador | N |
 | RF-13 | Bots sin interfaz, `N` configurable | N |

@@ -137,3 +137,77 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
   ```
 - **Por qué es un error:** la cola de aceptación (conexiones que ya completaron el saludo TCP y esperan su `accept()`) era más chica de lo configurado y justificado. En una ráfaga de 100+ bots conectando a la vez, el kernel descartaría SYN antes de lo previsto. Peor aún, el valor de `config.py` mentía: decía 128 y el kernel usaba 100. Es la clase de detalle que esconde un framework, y justo la razón por la que el proyecto crea el socket a mano.
 - **Cómo se verificó:** con `ss -tlnp` antes (Send-Q = 100) y después (Send-Q = 128), con el servidor real (`.venv/bin/python -m server.main`).
+
+### 5. Se presentaron como existentes unos timeouts que solo eran constantes en `config.py`
+
+- **Fecha y paso:** 2026-11-22 · verificación de P1–P4 (corregido en P6)
+- **Detectado por:** la IA, al comprobarlo con clientes silenciosos antes de dárselo a Max como "funciona".
+- **Prompt:**
+  > "quiero que me indiques todo lo que tengo que hacer yo para probar lo que llevamos, y que es lo que tengo que esperar que suceda en cada paso"
+- **Qué generó la IA:** en la guía de pruebas afirmó que el servidor cortaba al cliente que no habla (saludo de 5 s, ping cada 10 s, inactividad de 30 s). En `server/config.py` existían `HANDSHAKE_TIMEOUT_S`, `PING_INTERVAL_S` e `IDLE_TIMEOUT_S`, pero **ningún código los usaba**: solo `WRITE_TIMEOUT_S` se leía (en `Listener._close`). `ClientSession._on_pong` decía `return True   # P6`.
+- **Problema (categoría: sockets):** una constante de configuración no es un comportamiento. Un cliente que abre el TCP y calla ocupaba un descriptor y un cupo del semáforo para siempre (ataque slowloris). Se comprobó abriendo conexiones mudas: seguían `ESTAB` pasados 100 s.
+- **Corrección (P6):**
+  ```python
+  # server/adapters/listener.py: plazo TOTAL del saludo HTTP
+  return await asyncio.wait_for(self._handshake.handle(reader, writer), self._cfg.HANDSHAKE_TIMEOUT_S)
+  # server/adapters/client_session.py: plazo total antes del hello, inactividad después
+  data = await asyncio.wait_for(self._reader.read(n), self._read_timeout())
+  ```
+  más un ping cada `PING_INTERVAL_S` que deja el frame en una casilla (el writer sigue siendo el único que escribe) y `drain()` con `WRITE_TIMEOUT_S`.
+- **Por qué es un error:** se le dijo a Max que algo estaba hecho sin haberlo comprobado. Es el mismo defecto que la bitácora busca (afirmar un comportamiento de red que no existe), y justo el que la rúbrica castiga: sin plazos, un cliente roto se queda con el recurso para siempre.
+- **Cómo se verificó:** `tests/test_server_e2e.py`: `test_saludo_http_que_no_llega_se_cierra_por_timeout`, `test_slowloris_un_byte_cada_tanto_no_renueva_el_plazo`, `test_websocket_sin_hello_a_tiempo_error_timeout_y_1008`, `test_cliente_que_no_responde_los_pings_se_cierra_por_inactividad` y `test_cliente_que_responde_pong_sigue_conectado_y_se_mide_el_rtt`; `tests/test_client_session_write.py` para el plazo de escritura.
+
+### 6. Identificar el proceso del servidor por su nombre mezclaba procesos distintos
+
+- **Fecha y paso:** 2026-11-22 · P4 (comando de prueba) y P7 (`tools/monitor.py`)
+- **Detectado por:** Max (primer caso) y la IA (segundo caso).
+- **Prompt:**
+  > Max: "ls /proc/$PID/fd me dio 55" (al contar los descriptores del servidor con el `PID` que la IA le indicó obtener con `pgrep -f "server.main"`).
+- **Qué generó la IA:**
+  ```bash
+  PID=$(pgrep -f "server.main")      # comando que se le dio a Max
+  ```
+  y después, en `tools/monitor.py`, una `find_server_pid()` que devolvía el primer proceso cuyo `cmdline` contenía `server.main`.
+- **Problema (categoría: sockets):** `pgrep -f` devolvió dos PIDs (el servidor y un proceso del servidor de VS Code que también contenía esa cadena), así que el 55 no era del servidor. En el monitor, con dos servidores corriendo (8080 y 8081), mostraba los **descriptores y la memoria del 8080 junto a las métricas del 8081**: números plausibles y falsos.
+- **Corrección:**
+  ```diff
+  -if b"server.main" in args: return int(entry)
+  +# dueño del socket en LISTEN: /proc/net/tcp da el inode, /proc/<pid>/fd lo enlaza al proceso
+  +if os.readlink(f"/proc/{entry}/fd/{fd}") == f"socket:[{inode}]": return int(entry)
+  ```
+  Para Max se corrigió el comando a `pgrep -f "python -m server.main"`, y `tools/leakcheck.py` compara el `argv` exacto.
+- **Por qué es un error:** el nombre de un comando no identifica a quién escucha en un puerto; lo que sí lo identifica es el socket. Una herramienta de medición que mezcla fuentes es peor que no tener herramienta, porque inspira confianza.
+- **Cómo se verificó:** con el servidor real en el 8080 y uno de pruebas en el 8081, el monitor con `--port 8081` mostró el PID del 8081 (distinto del 8080). Con un puerto sin servidor termina con "Nadie escucha en el puerto 8099".
+
+### 7. `scenario_check` daba falsos FAIL por suponer que llegaba un estado por tick y que la posición era exacta
+
+- **Fecha y paso:** 2026-11-22 · P4/P5 (herramientas de verificación)
+- **Detectado por:** la IA, al ver resultados imposibles en su propia herramienta.
+- **Prompt:**
+  > "Pues las pruebas pasaron, asi que comitea y sigamos" (tras pedir una verificación automática en vez de leer logs a ojo).
+- **Qué generó la IA:** primero `peak_speed` dividía la distancia entre dos estados por **un** `dt`, y luego comparaba contra `MAX_SPEED` sin tolerancia:
+  ```python
+  speed = hypot(x1 - x0, y1 - y0) / dt        # asume que estados consecutivos son ticks consecutivos
+  assert speed <= cfg.MAX_SPEED
+  ```
+- **Problema (categoría: protocolo):** el protocolo dice que el buzón de tamaño 1 **reemplaza** estados (`docs/protocolo.md` §4), así que el cliente puede ver saltos de varios ticks. Resultado: "pico 1584 px/s" con `MAX_SPEED = 170`. Segundo falso FAIL: "171 vs 170", porque las posiciones viajan redondeadas a `POSITION_DECIMALS` = 0,1 px y eso mete ±3 px/s a 30 Hz.
+- **Corrección:**
+  ```diff
+  -speed = hypot(dx, dy) / dt
+  +speed = hypot(dx, dy) / ((tick1 - tick0) * dt)      # ticks reales entre estados
+  +assert speed <= cfg.MAX_SPEED + rounding_tolerance(cfg)   # 10**-POSITION_DECIMALS / TICK_DT
+  ```
+- **Por qué es un error:** otra vez se asumió cómo llegan los datos (un mensaje por tick), la misma falsa suposición del criterio 2 de la rúbrica, pero dentro de la herramienta de pruebas. Un falso FAIL hace perder confianza en la herramienta y esconde los fallos verdaderos.
+- **Cómo se verificó:** la velocidad real se calculó directo sobre el dominio (170,000000 px/s) y `scenario_check` volvió a dar todo PASS (11 PASS, 0 FAIL).
+
+### 8. Una falsa alarma de "el servidor no se recupera" en la prueba de EMFILE: el logging síncrono bloqueó el event loop
+
+- **Fecha y paso:** 2026-11-22 · P6 (prueba con `ulimit -n 30`)
+- **Detectado por:** la IA, depurando su propia prueba.
+- **Prompt:**
+  > "una vez verifiques que todo funciona ve con p6" (incluye comprobar que `accept` resiste EMFILE).
+- **Qué generó la IA:** un script de prueba que lanzaba el servidor con `stdout=subprocess.PIPE` y solo leía la salida al final.
+- **Problema (categoría: concurrencia):** bajo EMFILE, asyncio escribe un error con traceback por cada intento de `accept` (~2000 líneas en pocos segundos). El pipe (64 KB) se llenó y el `write()` **síncrono** del módulo `logging` bloqueó el hilo del event loop: nada avanzaba (CPU 0,08 s, 23 conexiones sin atender, el tick congelado) hasta que el script leyó. Se interpretó primero como un fallo del servidor ("no se recupera en 30 s").
+- **Corrección:** en la prueba, enviar la salida a un archivo. Con eso: 80 conexiones con solo 30 descriptores, el servidor sigue vivo y vuelve a contestar `/metrics` a los 2,5 s de soltarlas.
+- **Por qué es un error:** el error fue de la prueba, pero revela un riesgo real del servidor que viola la regla "nada bloqueante en el event loop" (AGENTS.md §4.8): `logging` con un destino lento (terminal, pipe, disco) frena el tick y a todos los clientes. El diseño actual no lo evita; la mitigación estándar es un `QueueHandler` con un hilo aparte, y queda como riesgo documentado.
+- **Cómo se verificó:** `/proc/<pid>/fd` y `ss -tan` durante la prueba; `faulthandler` y la lista de tareas mostraron las conexiones sin atender; con la salida a un archivo el tiempo de recuperación fue de 2,5 s y la salida del proceso 0.

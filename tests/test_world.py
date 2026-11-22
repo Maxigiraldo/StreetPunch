@@ -118,3 +118,23 @@ def test_dominio_no_importa_red():
             else:
                 continue
             assert not names & forbidden, f"{path.name} importa {names & forbidden}"
+
+
+def test_margen_de_caida_el_disco_cuelga_del_borde_sin_caer():
+    cfg = CFG
+    margin = cfg.DISC_RADIUS * cfg.ELIMINATION_MARGIN_DISCS
+    world = World(cfg, Arena(cfg.ARENA_RADIUS, margin))
+    join(world, 2)
+    world.start_round()
+    world.disc(1).pos = Vec2(cfg.ARENA_RADIUS + margin - 0.1, 0)   # pasó el borde, pero no el margen
+    world.disc(2).pos = Vec2(0, cfg.ARENA_RADIUS + margin + 0.1)   # pasó el margen
+    world.eliminate_outside()
+    assert world.disc(1).alive and not world.disc(2).alive
+
+
+def test_main_arma_la_arena_con_el_margen_de_la_config():
+    from server.main import build
+    app = build(CFG, {})
+    arena = app.game.world.arena
+    assert arena.elimination_radius == CFG.ARENA_RADIUS + CFG.DISC_RADIUS * CFG.ELIMINATION_MARGIN_DISCS
+    app.listener._sock.close()

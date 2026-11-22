@@ -9,7 +9,8 @@
  */
 
 // ---- Constantes visuales (el juego en sí lo define el servidor, no el cliente) ----
-const CANVAS_MARGIN_PX = 24;       // aire entre la arena y el borde del canvas
+const CANVAS_MARGIN_PX = 48;       // aire entre la arena y el borde del canvas: cabe un disco entero
+                                   // fuera del borde, que es donde se ve caer (ELIMINATION_MARGIN_DISCS)
 const CHARGE_RING_GAP_PX = 5;      // separación entre el disco y su anillo de carga
 const CHARGE_RING_WIDTH_PX = 4;    // grosor del anillo de carga
 const OWN_OUTLINE_PX = 3;          // borde blanco para reconocer el propio disco

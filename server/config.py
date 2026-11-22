@@ -166,6 +166,14 @@ class Config:
     # hay espacio para moverse.
     DISC_RADIUS: float = 24.0
 
+    # Margen de caída: un disco solo se elimina cuando su CENTRO pasa del borde
+    # por esta cantidad de radios de disco. Con 0 se eliminaba al cruzar el
+    # borde con la mitad del disco aún sobre la arena y se sentía injusto
+    # ("se pierde y todavía hay mucho del personaje dentro"). Con 1.0 el disco
+    # ya está ENTERO fuera del borde cuando cae: se ve la caída. Más de ~2
+    # haría que alguien colgando casi sin apoyo siga "vivo" demasiado tiempo.
+    ELIMINATION_MARGIN_DISCS: float = 1.0
+
     # Aceleración al mantener una dirección. Con MAX_SPEED de 170 se llega
     # a la velocidad máxima en ~0,2 s: la respuesta se siente inmediata.
     # Se bajó de 1200 a 850 junto con MAX_SPEED para conservar esos 0,2 s.
@@ -277,6 +285,9 @@ class Config:
         # El disco tiene que caber holgado dentro de la arena.
         if self.DISC_RADIUS * 4 > self.ARENA_RADIUS:
             errors.append("DISC_RADIUS es demasiado grande para ARENA_RADIUS")
+
+        if self.ELIMINATION_MARGIN_DISCS < 0:
+            errors.append("ELIMINATION_MARGIN_DISCS no puede ser negativo")
 
         if self.MAILBOX_SIZE < 1 or self.INPUT_QUEUE_SIZE < 1:
             errors.append("MAILBOX_SIZE e INPUT_QUEUE_SIZE deben ser >= 1")
