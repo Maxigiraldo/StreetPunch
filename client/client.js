@@ -1,11 +1,11 @@
 "use strict";
 /*
- * Cliente de StreetPunch, paso P5a: SOLO MUESTRA lo que el servidor decide.
+ * Cliente de StreetPunch (P5a dibujo + P5b teclado).
  *
  * - Abre el WebSocket, manda `hello` y dibuja cada `state` tal como llega
- *   (sin interpolar: eso es P5c) y sin enviar teclas todavía (P5b).
- * - El cliente nunca calcula posiciones: el servidor es la autoridad.
- *   (docs/protocolo.md). Aquí solo se leen y se pintan.
+ *   (sin interpolar: eso es P5c).
+ * - Envía INTENCIONES (hacia dónde quiere moverse, si carga), nunca posiciones:
+ *   el servidor es la autoridad (docs/protocolo.md).
  */
 
 // ---- Constantes visuales (el juego en sí lo define el servidor, no el cliente) ----
@@ -45,7 +45,7 @@ const els = {
 const ctx = els.canvas.getContext("2d");
 
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
-const session = { socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null };
+const session = { socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null };
 
 // ---------------------------------------------------------------- mensajes
 
@@ -62,6 +62,11 @@ const handlers = {
     // Solo importa el más reciente: cada `state` se basta a sí mismo
     // (docs/protocolo.md §4), así que descartar los intermedios no pierde nada.
     session.latest = msg;
+    // El cambio de fase se detecta comparando con la anterior: no hay mensaje aparte.
+    if (msg.phase !== session.phase) {
+      session.phase = msg.phase;
+      if (Object.hasOwn(phaseEntered, msg.phase)) phaseEntered[msg.phase]();
+    }
   },
   error(msg) {
     setStatus(`El servidor rechazó el mensaje: ${msg.code}`);
@@ -85,8 +90,13 @@ function onMessage(event) {
 function connect(name) {
   session.me = null;
   session.latest = null;
+  session.phase = null;
   session.arena = DEFAULT_ARENA;
+  resetControls();
   els.enter.disabled = true;
+  // Sin esto el foco se queda en el campo de nombre y las teclas del juego se
+  // escribirían ahí en vez de llegar al juego.
+  els.name.blur();
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/ws`);
@@ -100,9 +110,115 @@ function connect(name) {
     // 1008 = el servidor rechazó algo (el `error` previo dice qué); se conserva ese texto.
     if (event.code !== 1008) setStatus(`Desconectado (código ${event.code})`);
     session.socket = null;
+    resetControls();
     els.enter.disabled = false;
   });
 }
+
+// ---------------------------------------------------------------- controles
+
+// `code` es la tecla FÍSICA (no la letra impresa): WASD funciona igual con un
+// teclado español, inglés u otro. El canvas dibuja el mundo sin invertir el eje y
+// (crece hacia abajo), así que "arriba" es dy = -1.
+const MOVE_KEYS = {
+  ArrowLeft: [-1, 0], KeyA: [-1, 0],
+  ArrowRight: [1, 0], KeyD: [1, 0],
+  ArrowUp: [0, -1], KeyW: [0, -1],
+  ArrowDown: [0, 1], KeyS: [0, 1],
+};
+const CHARGE_CODE = "Space";
+
+const controls = {
+  held: new Set(),                 // teclas de movimiento pulsadas ahora
+  intent: { dx: 0, dy: 0 },        // última intención ENVIADA (para no repetirla)
+  charging: false,                 // si la tecla de carga está pulsada
+};
+
+function send(msg) {
+  const socket = session.socket;
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+}
+
+function currentIntent() {
+  let dx = 0;
+  let dy = 0;
+  for (const code of controls.held) {
+    dx += MOVE_KEYS[code][0];
+    dy += MOVE_KEYS[code][1];
+  }
+  // Math.sign deja cada eje en -1, 0 o 1 (lo único que acepta el servidor) y
+  // hace que dos teclas opuestas se cancelen o que "flecha + WASD" no sumen doble.
+  return { dx: Math.sign(dx), dy: Math.sign(dy) };
+}
+
+// Solo se envía cuando la intención CAMBIA. El servidor mantiene la dirección
+// hasta que llega otra, y limita a 4 entradas por tick: mandar una por cada
+// evento del teclado lo desbordaría.
+function syncIntent() {
+  const next = currentIntent();
+  if (next.dx === controls.intent.dx && next.dy === controls.intent.dy) return;
+  controls.intent = next;
+  send({ t: "input", ...next });
+}
+
+function setCharging(on) {
+  if (on === controls.charging) return;
+  controls.charging = on;
+  send({ t: "charge", on });
+}
+
+function resetControls() {
+  controls.held.clear();
+  controls.intent = { dx: 0, dy: 0 };
+  controls.charging = false;
+}
+
+// El servidor crea discos NUEVOS en cada ronda, con la dirección en cero. Si el
+// jugador sigue manteniendo una tecla de la ronda anterior, el cliente cree que
+// ya la envió y no la repetiría: se reenvía al empezar la fase de juego.
+function resyncControls() {
+  if (controls.intent.dx !== 0 || controls.intent.dy !== 0) send({ t: "input", ...controls.intent });
+  if (controls.charging) send({ t: "charge", on: true });
+}
+const phaseEntered = { playing: resyncControls };
+
+function isTyping(event) {
+  return event.target instanceof HTMLInputElement;
+}
+
+window.addEventListener("keydown", (event) => {
+  if (isTyping(event)) return; // escribiendo el nombre: no es una orden de juego
+  const isMove = Object.hasOwn(MOVE_KEYS, event.code);
+  if (!isMove && event.code !== CHARGE_CODE) return;
+  event.preventDefault();      // evita que flechas y espacio desplacen la página
+  if (event.repeat) return;    // la repetición automática del teclado no es una pulsación nueva
+  if (isMove) {
+    controls.held.add(event.code);
+    syncIntent();
+  } else {
+    setCharging(true);
+  }
+});
+
+// keyup no mira isTyping a propósito: soltar una tecla siempre debe contar,
+// o un disco podría quedarse corriendo si el foco cambió con la tecla pulsada.
+window.addEventListener("keyup", (event) => {
+  if (Object.hasOwn(MOVE_KEYS, event.code)) {
+    controls.held.delete(event.code);
+    syncIntent();
+  } else if (event.code === CHARGE_CODE) {
+    setCharging(false);
+  }
+});
+
+// Si la ventana pierde el foco con una tecla pulsada, el navegador no manda su
+// keyup: sin esto el disco seguiría corriendo solo. Soltar la carga aquí lanza
+// la embestida; es preferible a dejar la carga "pegada" sin control del jugador.
+window.addEventListener("blur", () => {
+  controls.held.clear();
+  syncIntent();
+  setCharging(false);
+});
 
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
