@@ -38,7 +38,7 @@ def test_start_round_limita_a_max_activos_y_rota_la_cola(world):
     waiting = [CFG.MAX_ACTIVE_PLAYERS + 1, CFG.MAX_ACTIVE_PLAYERS + 2]
     assert not any(world.is_playing(i) for i in waiting)
     # Los que esperaban quedan primeros en la cola para la siguiente ronda.
-    assert list(world.players)[:2] == waiting
+    assert world.queue()[:2] == waiting
 
 
 def test_discos_nacen_mirando_al_centro(world):
@@ -133,8 +133,34 @@ def test_margen_de_caida_el_disco_cuelga_del_borde_sin_caer():
 
 
 def test_main_arma_la_arena_con_el_margen_de_la_config():
+    import dataclasses
+
     from server.main import build
-    app = build(CFG, {})
+    app = build(dataclasses.replace(CFG, PORT=0), {})   # puerto 0: nunca choca con un servidor en marcha
     arena = app.game.world.arena
     assert arena.elimination_radius == CFG.ARENA_RADIUS + CFG.DISC_RADIUS * CFG.ELIMINATION_MARGIN_DISCS
     app.listener._sock.close()
+
+
+def test_los_que_llegan_despues_de_empezar_la_ronda_juegan_antes_que_los_que_ya_jugaron(world):
+    """El fallo visto con 50 bots: quien jugó la ronda 1 volvía a jugar la 2
+    porque los que llegaron después quedaban detrás de él en la cola."""
+    join(world, CFG.MAX_ACTIVE_PLAYERS)
+    world.start_round()
+    first = set(world.discs)
+    for pid in range(100, 100 + CFG.MAX_ACTIVE_PLAYERS):       # llegan con la ronda ya en marcha
+        world.add_player(pid, f"tarde{pid}")
+    world.end_round()
+    world.start_round()
+    assert set(world.discs).isdisjoint(first)                  # ninguno repite
+
+
+def test_rotacion_justa_todos_juegan_antes_de_que_alguien_repita(world):
+    total = CFG.MAX_ACTIVE_PLAYERS * 3 + 5
+    join(world, total)
+    played: list[int] = []
+    for _ in range(4):                                         # 4 rondas: 3 grupos completos + los 5 restantes
+        world.start_round()
+        played += list(world.discs)
+        world.end_round()
+    assert set(played[: total]) == set(range(1, total + 1))    # las primeras `total` plazas son todos distintos

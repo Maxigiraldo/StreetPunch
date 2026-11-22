@@ -37,7 +37,10 @@ const OVERLAY_LINE_GAP_PX = 44;    // separación entre el texto grande y el peq
 const BANNER_TOP_PX = 34;          // el aviso de espectador va arriba del canvas
 const OVERLAY_COLOR = "#ffffff";
 const OVERLAY_SHADOW = "#000000";
-const SPECTATOR_HINT = "Eres espectador: entras en la próxima ronda";
+const SPECTATOR_HINT = "Eres espectador: entras en una próxima ronda";
+const COOLDOWN_RING_GAP_PX = 9;    // el anillo de enfriamiento va por fuera del de carga
+const COOLDOWN_COLOR = "#8a8f98";
+const MS_PER_S_FLOAT = 1000;
 
 // ---- Interpolación (P5c) ----
 const INTERP_DELAY_MS = 100;       // se dibuja ~100 ms en el pasado (docs/diseno.md, P5)
@@ -71,6 +74,8 @@ const ctx = els.canvas.getContext("2d");
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
 const session = {
   socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null,
+  maxPlayers: null,    // jugadores por ronda (del welcome): para calcular en qué turno entra un espectador
+  cooldownS: 0,        // enfriamiento de la embestida (del welcome)
   roster: new Map(),   // id -> { name, color }, tal como lo manda el servidor
 };
 
@@ -143,6 +148,8 @@ const handlers = {
     session.me = msg.id;
     session.color = msg.color;
     session.arena = msg.arena;
+    session.maxPlayers = msg.max_players;
+    session.cooldownS = msg.dash_cooldown_s;
     setStatus(`Conectado como #${msg.id}`);
   },
   roster(msg) {
@@ -185,6 +192,8 @@ function connect(name) {
   session.phase = null;
   session.arena = DEFAULT_ARENA;
   session.roster = new Map();
+  session.maxPlayers = null;
+  session.cooldownS = 0;
   resetTimeline();
   resetControls();
   els.enter.disabled = true;
@@ -220,12 +229,16 @@ const MOVE_KEYS = {
   ArrowUp: [0, -1], KeyW: [0, -1],
   ArrowDown: [0, 1], KeyS: [0, 1],
 };
-const CHARGE_CODE = "Space";
+// Varias teclas de carga: muchos teclados no registran Espacio + dos flechas a la vez
+// (límite de hardware, "ghosting"); con J o K en la otra mano no hay ese problema.
+const CHARGE_CODES = new Set(["Space", "KeyJ", "KeyK"]);
 
 const controls = {
   held: new Set(),                 // teclas de movimiento pulsadas ahora
   intent: { dx: 0, dy: 0 },        // última intención ENVIADA (para no repetirla)
-  charging: false,                 // si la tecla de carga está pulsada
+  chargeHeld: new Set(),           // teclas de carga pulsadas ahora (cargas mientras haya alguna)
+  charging: false,                 // si se está cargando (alguna tecla de carga pulsada)
+  cooldownUntil: 0,                // instante (performance.now) en que vuelve a estar lista la embestida
   // Hacia dónde sale la embestida: la última dirección NO nula enviada, igual que
   // Disc.facing en el servidor. null = no se ha pulsado nada esta ronda, y entonces
   // el servidor apunta al centro de la arena. El servidor no manda su `facing`,
@@ -261,16 +274,26 @@ function syncIntent() {
   send({ t: "input", ...next });
 }
 
+function ownCharge() {
+  const own = session.latest?.d.find((disc) => disc[0] === session.me);
+  return own ? own[3] : 0;
+}
+
 function setCharging(on) {
   if (on === controls.charging) return;
   controls.charging = on;
+  // Soltar con carga acumulada lanza la embestida y empieza el enfriamiento en el servidor:
+  // el cliente lo refleja (aproximado) para que el jugador VEA por qué no puede cargar.
+  if (!on && ownCharge() > 0) controls.cooldownUntil = performance.now() + session.cooldownS * MS_PER_S_FLOAT;
   send({ t: "charge", on });
 }
 
 function resetControls() {
   controls.held.clear();
   controls.intent = { dx: 0, dy: 0 };
+  controls.chargeHeld.clear();
   controls.charging = false;
+  controls.cooldownUntil = 0;
   controls.aim = null;
 }
 
@@ -278,6 +301,7 @@ function resetControls() {
 // la dirección en cero y apuntando al centro. Por eso la puntería se olvida ahí.
 function newRound() {
   controls.aim = null;
+  controls.cooldownUntil = 0;   // los discos nuevos nacen sin enfriamiento
 }
 
 // Si el jugador sigue manteniendo una tecla de la ronda anterior, el cliente cree
@@ -298,13 +322,14 @@ function isTyping(event) {
 window.addEventListener("keydown", (event) => {
   if (isTyping(event)) return; // escribiendo el nombre: no es una orden de juego
   const isMove = Object.hasOwn(MOVE_KEYS, event.code);
-  if (!isMove && event.code !== CHARGE_CODE) return;
+  if (!isMove && !CHARGE_CODES.has(event.code)) return;
   event.preventDefault();      // evita que flechas y espacio desplacen la página
   if (event.repeat) return;    // la repetición automática del teclado no es una pulsación nueva
   if (isMove) {
     controls.held.add(event.code);
     syncIntent();
   } else {
+    controls.chargeHeld.add(event.code);
     setCharging(true);
   }
 });
@@ -315,8 +340,9 @@ window.addEventListener("keyup", (event) => {
   if (Object.hasOwn(MOVE_KEYS, event.code)) {
     controls.held.delete(event.code);
     syncIntent();
-  } else if (event.code === CHARGE_CODE) {
-    setCharging(false);
+  } else if (CHARGE_CODES.has(event.code)) {
+    controls.chargeHeld.delete(event.code);
+    setCharging(controls.chargeHeld.size > 0); // con otra tecla de carga aún pulsada se sigue cargando
   }
 });
 
@@ -325,6 +351,7 @@ window.addEventListener("keyup", (event) => {
 // la embestida; es preferible a dejar la carga "pegada" sin control del jugador.
 window.addEventListener("blur", () => {
   controls.held.clear();
+  controls.chargeHeld.clear();
   syncIntent();
   setCharging(false);
 });
@@ -357,13 +384,20 @@ function amPlaying(state) {
 function describe(state) {
   const parts = [PHASE_TEXT[state.phase] ?? state.phase];
   if (state.ms !== null) parts.push(String(Math.ceil(state.ms / MS_PER_S)));
+  if (state.phase === "playing" && amPlaying(state)) {
+    parts.push(performance.now() < controls.cooldownUntil ? "· embestida recargando…" : "· embestida lista");
+  }
   return parts.join(" ");
 }
 
 // Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño].
 // Registro por fase (como `handlers`): una fase nueva es una entrada nueva.
 const overlayFor = {
-  waiting: () => ["Esperando jugadores…", "Se empieza cuando haya rivales"],
+  // Con el mínimo reunido el servidor abre una sala de espera y manda cuánto falta (`ms`);
+  // sin él, `ms` es null y solo se espera a que lleguen rivales.
+  waiting: (state) => state.ms === null
+    ? ["Esperando jugadores…", "Se empieza cuando haya rivales"]
+    : [String(Math.ceil(state.ms / MS_PER_S)), `La ronda empieza pronto: ${Math.min(session.roster.size, session.maxPlayers ?? Infinity)} jugadores listos`],
   countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!"],
   round_over: (state) => {
     if (state.winner === null) return ["Empate", "Nadie ganó la ronda"];
@@ -427,17 +461,32 @@ function drawText(text, x, y, font, color = OVERLAY_COLOR) {
   ctx.fillText(text, x, y);
 }
 
+// Turno de un espectador: el orden del roster ES la cola. Quienes juegan esta ronda ya
+// están al final de ella; entre los demás (los que esperan) la posición dice cuándo entra:
+// cada ronda toma a los primeros `maxPlayers` de la cola.
+function spectatorHint(state) {
+  const playing = new Set(state.d.map((disc) => disc[0]));
+  const queue = [...session.roster.keys()].filter((id) => !playing.has(id));
+  const position = queue.indexOf(session.me) + 1;
+  if (position === 0 || !session.maxPlayers) return SPECTATOR_HINT;
+  const rounds = Math.ceil(position / session.maxPlayers);
+  return rounds === 1
+    ? `Espectador, turno ${position} en la cola: juegas en la próxima ronda`
+    : `Espectador, turno ${position} en la cola: juegas en ${rounds} rondas`;
+}
+
 function drawOverlay(state, cx, cy) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   if (Object.hasOwn(overlayFor, state.phase)) {
     const [big, small] = overlayFor[state.phase](state);
-    drawText(big, cx, cy, state.phase === "countdown" ? BIG_FONT : MID_FONT);
+    const isNumber = /^\d+$/.test(big); // las cuentas atrás van grandes; los textos, medianos
+    drawText(big, cx, cy, isNumber ? BIG_FONT : MID_FONT);
     drawText(small, cx, cy + OVERLAY_LINE_GAP_PX, SMALL_FONT);
   }
   // En `waiting` aún no hay ronda de la que quedarse fuera: el aviso sería ruido.
   if (session.me !== null && state.phase !== "waiting" && !amPlaying(state)) {
-    drawText(SPECTATOR_HINT, cx, BANNER_TOP_PX, SMALL_FONT);
+    drawText(spectatorHint(state), cx, BANNER_TOP_PX, SMALL_FONT);
   }
 }
 
@@ -473,6 +522,20 @@ function drawAim(px, py, worldX, worldY, r, charging) {
   ctx.restore();
 }
 
+// Anillo gris que se vacía mientras la embestida se recarga: sin él, soltar y volver a
+// pulsar enseguida "no hace nada" y parece que los controles fallan.
+function drawCooldown(px, py, r, now) {
+  const total = session.cooldownS * MS_PER_S_FLOAT;
+  const left = controls.cooldownUntil - now;
+  if (total <= 0 || left <= 0) return;
+  const start = -Math.PI / 2;
+  ctx.beginPath();
+  ctx.arc(px, py, r + COOLDOWN_RING_GAP_PX, start, start + (left / total) * 2 * Math.PI);
+  ctx.strokeStyle = COOLDOWN_COLOR;
+  ctx.lineWidth = CHARGE_RING_WIDTH_PX;
+  ctx.stroke();
+}
+
 function draw(now) {
   const { width, height } = els.canvas;
   const cx = width / 2;
@@ -506,6 +569,7 @@ function draw(now) {
       ctx.stroke();
     }
     if (id === session.me && alive) drawAim(px, py, x, y, r, charge > 0);
+    if (id === session.me && alive) drawCooldown(px, py, r, now);
     if (charge > 0) { // anillo que se completa cuando la carga llega a 1.0
       const start = -Math.PI / 2;
       ctx.beginPath();

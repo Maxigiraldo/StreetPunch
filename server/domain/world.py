@@ -28,9 +28,14 @@ class World:
     def __init__(self, config: Config, arena: Arena) -> None:
         self._cfg = config
         self.arena = arena
-        # El orden de inserción del dict ES la cola para jugar: los primeros
-        # MAX_ACTIVE_PLAYERS entran a la siguiente ronda.
+        # Todos los conectados, en ORDEN DE LLEGADA (nunca se reordena). La
+        # cola para jugar se calcula aparte, en queue(): reordenar este dict
+        # al empezar la ronda fallaba, porque los que llegaban DESPUÉS
+        # quedaban detrás de quienes ya habían jugado y el mismo grupo volvía
+        # a ser el primero de la cola (visto con 50 bots).
         self.players: dict[int, Player] = {}
+        self._last_round: dict[int, int] = {}   # id -> número de la última ronda que jugó
+        self._round_no = 0
         # Discos de la ronda actual (vivos y eliminados). Vacío fuera de ronda.
         self.discs: dict[int, Disc] = {}
         self.scores: dict[int, int] = {}
@@ -46,8 +51,17 @@ class World:
     def remove_player(self, player_id: int) -> None:
         # pop con valor por defecto: un LeaveCommand repetido no falla.
         self.players.pop(player_id, None)
+        self._last_round.pop(player_id, None)
         self.discs.pop(player_id, None)   # RF-04: su disco desaparece
         self.scores.pop(player_id, None)
+
+    def queue(self) -> list[int]:
+        """Orden de turno: primero quienes NUNCA han jugado o jugaron hace más
+        rondas, y a igualdad, por orden de llegada. Cada ronda toma a los
+        MAX_ACTIVE_PLAYERS primeros. Es determinista y justo: nadie vuelve a
+        jugar mientras haya alguien que lleva más rondas esperando."""
+        arrival = {pid: i for i, pid in enumerate(self.players)}
+        return sorted(self.players, key=lambda pid: (self._last_round.get(pid, 0), arrival[pid]))
 
     def player_count(self) -> int:
         return len(self.players)
@@ -67,16 +81,17 @@ class World:
     # ---------------- ronda ----------------
 
     def start_round(self) -> None:
-        """Coloca a los primeros de la cola y los manda al final de ella: así
-        los espectadores en espera entran en la ronda siguiente (RF-03)."""
-        chosen = list(self.players)[: self._cfg.MAX_ACTIVE_PLAYERS]
+        """Coloca a los primeros de la cola y anota que jugaron esta ronda: así
+        pasan al final de la cola y los que esperan entran después (RF-03)."""
+        chosen = self.queue()[: self._cfg.MAX_ACTIVE_PLAYERS]
+        self._round_no += 1
         points = self.arena.spawn_points(len(chosen), self._cfg.SPAWN_RING_FRACTION)
         self.discs = {}
         for player_id, pos in zip(chosen, points):
             # Cada disco nace mirando al centro: una embestida sin moverse
             # va hacia la pelea, no hacia el vacío.
             self.discs[player_id] = Disc(player_id, pos, facing=(-pos).normalized())
-            self.players[player_id] = self.players.pop(player_id)  # al final de la cola
+            self._last_round[player_id] = self._round_no
 
     def end_round(self) -> None:
         self.discs = {}

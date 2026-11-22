@@ -147,6 +147,7 @@ class JsonFrameEncoder(SnapshotEncoder):
         return self._frame({
             "t": "welcome", "id": w.id, "color": w.color, "role": w.role,
             "arena": {"radius": w.arena_radius, "disc_radius": w.disc_radius},
+            "max_players": w.max_players, "dash_cooldown_s": w.dash_cooldown_s,
         })
 
     def encode_roster(self, entries: tuple[RosterEntry, ...]) -> bytes:

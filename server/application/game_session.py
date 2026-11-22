@@ -43,8 +43,10 @@ class GameSession:
         self._metrics = metrics
         self._tick = 0
         self._observers: dict[int, SnapshotObserver] = {}
-        # Verdadero si entró o salió alguien desde el último roster enviado.
-        self._roster_dirty = False
+        # Ids (en orden de cola) del último roster enviado. El orden también
+        # cuenta: cada ronda manda a quienes jugaron al final de la cola, y el
+        # cliente deduce de ese orden en qué turno le toca.
+        self._last_roster_ids: tuple[int, ...] = ()
 
         # Cola productor-consumidor: N readers producen y el tick consume.
         # Acotada: si un cliente inunda, la memoria no crece; se descarta.
@@ -71,17 +73,16 @@ class GameSession:
 
     def subscribe(self, player_id: int, observer: SnapshotObserver) -> None:
         self._observers[player_id] = observer
-        self._roster_dirty = True
         player = self.world.players[player_id]
         welcome = WelcomeInfo(player.id, player.color, self.world.role_of(player_id),
-                              self._cfg.ARENA_RADIUS, self._cfg.DISC_RADIUS)
+                              self._cfg.ARENA_RADIUS, self._cfg.DISC_RADIUS,
+                              self._cfg.MAX_ACTIVE_PLAYERS, self._cfg.DASH_COOLDOWN_S)
         # Se publica en el MISMO tick en que se suscribe, antes del estado de
         # este tick: el writer del cliente siempre ve el welcome primero.
         self._notify(observer, observer.on_welcome, self._encoder.encode_welcome(welcome))
 
     def unsubscribe(self, player_id: int) -> None:
         self._observers.pop(player_id, None)
-        self._roster_dirty = True
 
     def stats(self) -> dict:
         """Lectura para /metrics. Solo lee y no hay await: ve un estado
@@ -106,15 +107,19 @@ class GameSession:
         self._publish()
 
     def _publish_roster_if_changed(self) -> None:
-        """El roster (id, nombre, color de TODOS) solo se envía cuando alguien
-        entra o sale, no cada tick: nombres y colores no cambian durante la
-        sesión. Va a todos los observadores sin importar su política de
-        envío, y completo cada vez (un roster nuevo reemplaza al anterior, así
-        que si el buzón de un cliente lento pisa uno, no se pierde nada)."""
-        if not self._roster_dirty:
+        """El roster (id, nombre y color de TODOS, en orden de cola) solo se
+        envía cuando cambia la lista de ids o su ORDEN: cuando alguien entra o
+        sale, o cuando empieza una ronda y los que juegan pasan al final de la
+        cola. Nombres y colores no cambian durante la sesión. Va a todos los
+        observadores sin importar su política de envío, y completo cada vez
+        (uno nuevo reemplaza al anterior, así que si el buzón de un cliente
+        lento pisa uno, no se pierde nada)."""
+        ids = tuple(self.world.queue())   # el orden del roster ES la cola
+        if ids == self._last_roster_ids:
             return
-        self._roster_dirty = False
-        entries = tuple(RosterEntry(p.id, p.name, p.color) for p in self.world.players.values())
+        self._last_roster_ids = ids
+        players = self.world.players
+        entries = tuple(RosterEntry(i, players[i].name, players[i].color) for i in ids)
         data = self._encoder.encode_roster(entries)   # UNA vez, como el estado
         for observer in self._observers.values():
             self._notify(observer, observer.on_roster, data)

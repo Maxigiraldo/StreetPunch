@@ -74,7 +74,7 @@ cliente                                servidor
 ### `welcome` (una sola vez, dirigido a un cliente)
 
 ```json
-{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{"radius":300.0,"disc_radius":24.0}}
+{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{"radius":300.0,"disc_radius":24.0},"max_players":12,"dash_cooldown_s":1.5}
 ```
 
 | Campo | Significado |
@@ -83,6 +83,8 @@ cliente                                servidor
 | `color` | Color asignado a su disco |
 | `role` | `"player"` o `"spectator"` en el momento de entrar. Como nadie entra a mitad de ronda, al llegar siempre es `"spectator"`; el rol real se deduce de si el `id` aparece en `d` |
 | `arena` | Geometría para dibujar |
+| `max_players` | Jugadores por ronda. Con el orden del `roster` el cliente calcula en qué turno entra un espectador |
+| `dash_cooldown_s` | Segundos de enfriamiento tras una embestida; el cliente dibuja el anillo de recarga |
 
 Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mismo tick en que ejecuta el `JoinCommand`, y el `writer` lo envía antes que el contenido del buzón.
 
@@ -92,10 +94,11 @@ Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mi
 {"t":"roster","players":[{"id":7,"name":"Ana","color":"#e4572e"},{"id":9,"name":"Luis","color":"#17bebb"}]}
 ```
 
-Lista **completa** de todos los conectados que ya hicieron `hello` (jugadores y espectadores). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
+Lista **completa**, **en orden de cola**, de todos los conectados que ya hicieron `hello` (jugadores y espectadores). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
 
 - Lo genera el tick (único escritor) en el mismo tick en que ejecuta el `Connect` o el `Disconnect`, y lo recibe **todo** observador, también los espectadores (que reciben `state` a 10 Hz).
 - Orden garantizado para un cliente nuevo: `welcome`, `roster`, `state`.
+- El orden ES la cola: cada ronda toma a los primeros `max_players` y los manda al final. Por eso también se reenvía cuando solo cambia el orden (al empezar una ronda). Un espectador cuenta cuántos hay delante de él entre los que **no** están en `d`.
 - Siempre va completo, así que uno nuevo reemplaza al anterior: si el buzón de un cliente lento pisa un roster, no se pierde información.
 - Un id que aparece en `state` y no en el `roster` (carrera de un tick) se dibuja sin nombre hasta que llegue el siguiente roster.
 
@@ -110,7 +113,7 @@ Lista **completa** de todos los conectados que ya hicieron `hello` (jugadores y 
 | --- | --- |
 | `tick` | Número de tick, creciente. Sirve para descartar estados viejos y para interpolar |
 | `phase` | `"waiting"`, `"countdown"`, `"playing"` o `"round_over"` |
-| `ms` | Milisegundos que le quedan a la fase actual; `null` si la fase no tiene plazo (`waiting`, `playing`) |
+| `ms` | Milisegundos que le quedan a la fase actual; `null` si la fase no tiene plazo (`playing`, o `waiting` sin el mínimo de jugadores). En `waiting` con el mínimo reunido es lo que falta para que arranque la ronda (sala de espera, `LOBBY_WAIT_S`) |
 | `winner` | Id del ganador durante `round_over`; `null` en las demás fases o si nadie ganó |
 | `scores` | Rondas ganadas por id (las claves son strings porque JSON solo admite claves string) |
 | `d` | Discos de la ronda: `[id, x, y, carga 0..1, vivo 1/0]`. Un disco eliminado queda con `vivo = 0` hasta el fin de la ronda |

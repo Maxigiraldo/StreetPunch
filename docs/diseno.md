@@ -45,9 +45,9 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 | --- | --- | --- |
 | RF-01 | El servidor entrega la página en `GET /` y acepta WebSocket en `/ws` | N |
 | RF-02 | El cliente envía su nombre (máx. 16 caracteres) y recibe id y color | N |
-| RF-03 | Una arena, hasta 12 jugadores activos; los demás son espectadores en cola para la siguiente ronda | N |
+| RF-03 | Una arena, hasta 12 jugadores activos; los demás son espectadores en cola. Cada ronda toma a los 12 primeros de la cola y los manda al final (rotación); el cliente muestra el turno de cada espectador | N |
 | RF-04 | Si un jugador se desconecta su disco desaparece; si queda uno solo, la ronda termina | N |
-| RF-05 | Fases: esperando (mín. 2), cuenta regresiva (3 s), jugando, fin, resultados (3 s) | N |
+| RF-05 | Fases: esperando (mín. 2 y una sala de espera de `LOBBY_WAIT_S` = 5 s para que lleguen más; si se llena arranca ya; entre rondas seguidas no se espera), cuenta regresiva (3 s), jugando, fin, resultados (3 s) | N |
 | RF-06 | Marcador de rondas ganadas en memoria durante la sesión | N |
 | RF-07 | Movimiento con aceleración, fricción y velocidad máxima; la fricción es menor por encima de esa velocidad (embestida y golpes) | N |
 | RF-08 | Embestida: se carga hasta 1 s y al soltar da un impulso proporcional; enfriamiento de 1,5 s. Mientras se carga el disco no se mueve y las flechas solo apuntan la embestida | N |

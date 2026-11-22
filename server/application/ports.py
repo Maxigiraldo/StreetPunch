@@ -35,6 +35,8 @@ class WelcomeInfo:
     role: str
     arena_radius: float
     disc_radius: float
+    max_players: int           # jugadores por ronda: el cliente calcula en qué turno le toca
+    dash_cooldown_s: float     # para mostrar el enfriamiento de la embestida
 
 
 @dataclass(frozen=True)

@@ -66,7 +66,7 @@ def make(config: Config = Config()) -> tuple[GameSession, FakeEncoder, Metrics]:
     encoder = FakeEncoder()
     policies = {ROLE_PLAYER: EveryTick(), ROLE_SPECTATOR: EveryNthTick(config.SPECTATOR_EVERY_N_TICKS)}
     game = GameSession(config, World(config, Arena(config.ARENA_RADIUS)),
-                       Waiting(RoundContext(config, Physics(config))), encoder, policies, metrics)
+                       Waiting(RoundContext(config, Physics(config)), lobby=False), encoder, policies, metrics)
     return game, encoder, metrics
 
 
@@ -189,7 +189,7 @@ def test_roster_llega_tambien_a_espectadores_a_pesar_de_su_politica_10hz():
     game.tick()                       # empieza la ronda: 1 y 2 juegan
     spectator = connect(game, 3)
     game.tick()                       # puede no tocarle estado en este tick; el roster sí
-    assert spectator.rosters == [b"roster:1=p1,2=p2,3=p3"]
+    assert spectator.rosters == [b"roster:3=p3,1=p1,2=p2"]   # el que nunca jugó, primero en la cola
 
 
 def test_roster_al_salir_alguien_ya_no_lo_incluye():
@@ -199,3 +199,15 @@ def test_roster_al_salir_alguien_ya_no_lo_incluye():
     game.submit_membership(Disconnect(2))
     game.tick()
     assert a.rosters[-1] == b"roster:1=p1"
+
+
+def test_roster_sale_con_el_orden_de_la_cola_ya_rotado_y_no_se_repite():
+    """Al empezar la ronda los que juegan pasan al final: el orden del roster ES la cola."""
+    cfg = Config(MAX_ACTIVE_PLAYERS=2)
+    game, _, _ = make(cfg)
+    obs = [connect(game, i) for i in (1, 2, 3)]
+    game.tick()                       # entran 1, 2 y 3; la ronda toma a 1 y 2 y los manda al final
+    assert obs[2].rosters == [b"roster:3=p3,1=p1,2=p2"]   # un solo mensaje, con el orden final
+    for _ in range(5):
+        game.tick()
+    assert len(obs[2].rosters) == 1   # sin cambios de orden no se repite
