@@ -149,8 +149,10 @@ class Config:
     FRICTION_PER_S: float = 4.0
 
     # Velocidad de la embestida con carga completa; es proporcional a la
-    # carga. Es la velocidad más alta del juego, así que es la que limita el
-    # tunneling (ver la validación).
+    # carga. También es el TOPE GLOBAL de velocidad: un choque elástico contra
+    # un disco en embestida (masa x2) puede lanzar al otro hasta a 4/3 de esta
+    # velocidad. Sin tope, eso rompería la garantía contra el tunneling.
+    # Physics recorta toda velocidad a este valor antes de mover.
     DASH_MAX_SPEED: float = 600.0
 
     # "Un disco en embestida empuja más" (RF-09): durante la embestida su
@@ -158,6 +160,23 @@ class Config:
     # siendo elástico y conserva el momento: no hace falta una regla
     # especial que lo rompa.
     DASH_MASS_FACTOR: float = 2.0
+
+    # Masa normal de un disco. Es la unidad: lo que importa es la razón con
+    # DASH_MASS_FACTOR, no el valor absoluto.
+    DISC_MASS: float = 1.0
+
+    # Los discos aparecen repartidos en un círculo al 60 % del radio de la
+    # arena: lejos del borde (nadie cae al empezar) y lejos del centro (no
+    # nacen encimados). Con 12 discos quedan separados ~94 px entre centros,
+    # casi el doble del diámetro.
+    SPAWN_RING_FRACTION: float = 0.6
+
+    # Colores de los discos: 12, uno por jugador activo. Elegidos para
+    # distinguirse sobre fondo oscuro. Si hay más jugadores, se repiten.
+    PLAYER_COLORS: tuple[str, ...] = (
+        "#e4572e", "#29b6f6", "#ffc914", "#76b041", "#c060a1", "#17bebb",
+        "#ff8c42", "#8e7dbe", "#f25f5c", "#2ec4b6", "#d4e157", "#f7a1c4",
+    )
 
     # ------------------------------------------------------------------
     # Valores derivados (no se configuran: salen de los de arriba)
@@ -184,7 +203,8 @@ class Config:
         # Tunneling: la física detecta choques comparando posiciones tick a
         # tick. Si un disco avanza en un tick más que su radio, puede pasar
         # "a través" de otro disco sin que nunca se detecte el solapamiento.
-        # Se usa la velocidad más alta posible (embestida a carga completa).
+        # Se usa la velocidad más alta posible: DASH_MAX_SPEED, que Physics
+        # impone como tope global incluso después de un choque.
         max_step = max(self.MAX_SPEED, self.DASH_MAX_SPEED) * self.TICK_DT
         if max_step >= self.DISC_RADIUS:
             errors.append(
