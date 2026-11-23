@@ -85,19 +85,13 @@ class Config:
     # de cada N ticks.
     QUIET_PHASE_HZ: int = 10
 
-    # Meta medida del percentil 99 del tick: 5 ms es el 15 % de los 33 ms
-    # disponibles. Es una meta para las métricas, no una regla que se imponga.
-    TICK_P99_TARGET_MS: float = 5.0
-
     # ------------------------------------------------------------------
     # Backpressure y límites por cliente
     # ------------------------------------------------------------------
 
-    # Estados que caben en el buzón de salida de cada cliente. Con 1, el
-    # estado nuevo reemplaza al viejo: a un cliente lento se le saltan
-    # estados en vez de acumularle memoria. Subir a 2 solo si hay tirones
-    # (cada estado extra suma 33 ms de retraso).
-    MAILBOX_SIZE: int = 1
+    # (El buzón de salida de cada cliente es UNA casilla por diseño: el estado nuevo
+    # reemplaza al viejo, así a un cliente lento se le saltan estados en vez de
+    # acumularle memoria. No es configurable: ver ClientSession.)
 
     # Capacidad de la cola de entradas compartida (lectores -> tick). Al
     # estar acotada, la memoria no crece sin límite; si se llena, se
@@ -329,8 +323,8 @@ class Config:
         if self.ELIMINATION_MARGIN_DISCS < 0:
             errors.append("ELIMINATION_MARGIN_DISCS no puede ser negativo")
 
-        if self.MAILBOX_SIZE < 1 or self.INPUT_QUEUE_SIZE < 1:
-            errors.append("MAILBOX_SIZE e INPUT_QUEUE_SIZE deben ser >= 1")
+        if self.INPUT_QUEUE_SIZE < 1:
+            errors.append("INPUT_QUEUE_SIZE debe ser >= 1")
 
         if errors:
             raise ValueError("Config inválida:\n  - " + "\n  - ".join(errors))
