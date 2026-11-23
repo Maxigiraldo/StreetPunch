@@ -29,7 +29,7 @@ from server.application.game_session import GameSession
 from server.application.ports import SnapshotObserver
 from server.application.session_commands import Connect, Disconnect
 from server.config import Config
-from server.domain.commands import Command, JoinCommand
+from server.domain.commands import Command, HallCommand, JoinCommand
 from server.metrics import Metrics
 
 log = logging.getLogger(__name__)
@@ -66,6 +66,8 @@ class ClientSession(SnapshotObserver):
         self._mailbox: bytes | None = None
         self._welcome: bytes | None = None
         self._roster: bytes | None = None
+        self._rooms: bytes | None = None      # lista de salas (vestíbulo)
+        self._notice: bytes | None = None     # rechazo o cambio de sala
         self._pong: bytes | None = None
         self._ping: bytes | None = None
         self._close_frames: bytes | None = None
@@ -101,6 +103,18 @@ class ClientSession(SnapshotObserver):
         # Una casilla: llega siempre la lista COMPLETA, así que la nueva
         # reemplaza a la vieja sin perder información.
         self._roster = data
+        self._event.set()
+
+    def on_rooms(self, data: bytes) -> None:
+        # Lista COMPLETA de salas: la nueva reemplaza a la vieja sin perder nada.
+        self._rooms = data
+        self._event.set()
+
+    def on_notice(self, data: bytes) -> None:
+        # Una casilla: si llegan dos avisos antes de que el writer envíe, gana el
+        # último (p. ej. un rechazo y luego el cambio de sala: el cliente queda
+        # bien porque el último aviso describe el estado actual).
+        self._notice = data
         self._event.set()
 
     # ---------------- ciclo de vida ----------------
@@ -185,7 +199,7 @@ class ClientSession(SnapshotObserver):
         self._codec = self._game_codec
         self._deliver = self._deliver_input
 
-    def _deliver_input(self, command: Command) -> None:
+    def _deliver_input(self, command: Command | HallCommand) -> None:
         self._game.submit_input(self.player_id, command)   # put_nowait; si está llena, se descarta
 
     def _on_ping(self, frame: Frame) -> bool:
@@ -242,17 +256,20 @@ class ClientSession(SnapshotObserver):
             # Región crítica SIN await: tomar y vaciar las casillas. Nadie
             # puede intercalarse aquí, porque las otras tareas solo corren en
             # un await.
-            close, pong, ping, welcome, roster, state = (
-                self._close_frames, self._pong, self._ping, self._welcome, self._roster, self._mailbox)
-            self._pong = self._ping = self._welcome = self._roster = self._mailbox = None
+            close, pong, ping, welcome, notice, rooms, roster, state = (
+                self._close_frames, self._pong, self._ping, self._welcome, self._notice,
+                self._rooms, self._roster, self._mailbox)
+            self._pong = self._ping = self._welcome = self._notice = self._rooms = None
+            self._roster = self._mailbox = None
 
             if close is not None:
                 self._writer.write(close)
                 await self._drain()
                 return
             # Prioridad: control, luego welcome (siempre antes del primer
-            # estado), luego roster (quién es quién), luego estado. Cada trama ocupa UNA write().
-            for data in (pong, ping, welcome, roster, state):
+            # estado), avisos (cambio de sala antes que lo de la sala nueva),
+            # lista de salas, roster (quién es quién) y estado. Cada trama ocupa UNA write().
+            for data in (pong, ping, welcome, notice, rooms, roster, state):
                 if data is not None:
                     self._writer.write(data)
                     self._metrics.bytes_sent += len(data)

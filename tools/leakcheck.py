@@ -22,6 +22,8 @@ import sys
 import threading
 import time
 
+import procinfo
+
 # Estados TCP en /proc/net/tcp (columna "st", en hexadecimal).
 TCP_ESTABLISHED = "01"
 TCP_CLOSE_WAIT = "08"
@@ -35,19 +37,13 @@ SOCKET_TIMEOUT = 3.0   # si el servidor no contesta en 3 s, el cliente de prueba
 READ_BYTES = 4096
 
 
-def find_server_pid() -> int:
-    """Busca el proceso `python -m server.main` recorriendo /proc."""
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit() or int(entry) == os.getpid():
-            continue
-        try:
-            with open(f"/proc/{entry}/cmdline", "rb") as f:
-                args = f.read().split(b"\0")
-        except OSError:
-            continue  # el proceso terminó mientras recorríamos
-        if b"server.main" in args:
-            return int(entry)
-    sys.exit("No encuentro el servidor: ¿está corriendo `python -m server.main`?")
+def find_server_pid(port: int) -> int:
+    """El proceso que ESCUCHA en ese puerto (por el inodo del socket, no por el nombre: un
+    nombre puede coincidir con otro proceso, o no coincidir con el servidor; bitácora, entrada 6)."""
+    pid = procinfo.find_server_pid(port)
+    if pid is None:
+        sys.exit(f"Nadie escucha en el puerto {port}: ¿está corriendo el servidor?")
+    return pid
 
 
 def count_fds(pid: int) -> int:
@@ -141,7 +137,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
 
-    pid = find_server_pid()
+    pid = find_server_pid(args.port)
     fds_before = count_fds(pid)
     side_before = count_server_side(args.port)
     print(f"Servidor pid={pid}  fds antes={fds_before}  conexiones antes={side_before}")

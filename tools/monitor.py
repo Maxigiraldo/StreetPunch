@@ -20,7 +20,9 @@ Qué significa cada columna:
   rtt p50/max  ping -> pong de los clientes conectados (ms, últimas muestras). Es la
             latencia de verdad de cada jugador: red + event loop + su navegador.
             "—" si aún no hubo ningún ping (el primero sale a los 10 s).
-  conn      conexiones activas (jugando + espectadores = suscritas).
+  conn      conexiones activas (en salas + en el vestíbulo).
+  salas     salas creadas. juega: jugadores en salas que están en `playing`.
+            lobby: conectados que aún no están en ninguna sala.
   out/in    KB/s enviados por el servidor y entradas/s que el tick ejecutó.
   drop/s    entradas descartadas (cola llena o más de 4 por tick).
   ovw/s     estados reemplazados en el buzón sin enviarse = un cliente lento.
@@ -72,7 +74,7 @@ def fmt(value: float | None, width: int, decimals: int = 1) -> str:
 
 
 HEADER = (f"{'hora':8} {'tick/s':>6} {'p50':>5} {'p99':>5} {'max':>5} {'http':>5} {'rtt50':>5} {'rttmx':>5} "
-          f"{'conn':>4} {'juega':>5} {'fase':<9} {'out KB/s':>8} {'in/s':>5} {'drop/s':>6} "
+          f"{'conn':>4} {'salas':>5} {'juega':>5} {'lobby':>5} {'out KB/s':>8} {'in/s':>5} {'drop/s':>6} "
           f"{'ovw/s':>5} {'ovr':>4} {'to':>3} {'fd':>4} {'MB':>5} {'cpu%':>5} {'cw':>3}  alertas")
 
 
@@ -110,7 +112,7 @@ def build_row(now: dict, prev: dict | None, http_ms: float,
     kb_out = rate("bytes_sent") / 1024
     line = (f"{time.strftime('%H:%M:%S')} {fmt(tick_rate, 6)} {fmt(tick_ms['p50'], 5)} "
             f"{fmt(tick_ms['p99'], 5)} {fmt(tick_ms['max'], 5)} {fmt(http_ms, 5)} {fmt(rtt['p50'], 5)} {fmt(rtt['max'], 5)} "
-            f"{now['connections_active']:>4} {game['playing']:>5} {game['phase']:<9} "
+            f"{now['connections_active']:>4} {game['rooms']:>5} {game['playing']:>5} {game['lobby']:>5} "
             f"{kb_out:>8.1f} {rate('inputs_applied'):>5.0f} {drops:>6.1f} "
             f"{rate('mailbox_overwrites'):>5.1f} {now['tick_overruns']:>4} {timeouts:>3} {proc['fds']:>4} "
             f"{proc['rss_mb']:>5.1f} {fmt(cpu, 5)} {close_wait:>3}  ")

@@ -19,9 +19,9 @@ from server.application.game_session import GameSession
 from server.application.send_policies import EveryNthTick, EveryTick
 from server.config import Config
 from server.domain.arena import Arena
+from server.domain.hall import Hall
 from server.domain.physics import Physics
-from server.domain.round_states import RoundContext, Waiting
-from server.domain.world import ROLE_PLAYER, ROLE_SPECTATOR, World
+from server.domain.round_states import RoundContext
 from server.log_filters import RateLimitFilter
 from server.metrics import Metrics
 
@@ -72,14 +72,14 @@ def build(config: Config, static: dict[str, StaticFile]) -> App:
     """Arma el grafo de objetos (inversión de dependencias): cada clase recibe
     lo que necesita por constructor y no sabe quién lo creó."""
     metrics = Metrics(config.METRICS_TICK_WINDOW)
-    world = World(config, Arena(config.ARENA_RADIUS, config.DISC_RADIUS * config.ELIMINATION_MARGIN_DISCS))
-    initial = Waiting(RoundContext(config, Physics(config)))
+    arena = Arena(config.ARENA_RADIUS, config.DISC_RADIUS * config.ELIMINATION_MARGIN_DISCS)
+    hall = Hall(config, arena, RoundContext(config, Physics(config)))
     encoder = JsonFrameEncoder(config)
-    policies = {
-        ROLE_PLAYER: EveryTick(),
-        ROLE_SPECTATOR: EveryNthTick(config.SPECTATOR_EVERY_N_TICKS),
-    }
-    game = GameSession(config, world, initial, encoder, policies, metrics)
+    # Frecuencia de envío por fase de la sala (Strategy): 30 Hz solo mientras se
+    # juega; en espera, cuenta atrás y resultados nada se mueve.
+    quiet = EveryNthTick(config.QUIET_EVERY_N_TICKS)
+    policies = {"waiting": quiet, "countdown": quiet, "playing": EveryTick(), "round_over": quiet}
+    game = GameSession(config, hall, encoder, policies, metrics)
     hello, play = hello_codec(config), game_codec()
 
     def new_session(player_id: int, reader: asyncio.StreamReader,

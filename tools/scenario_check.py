@@ -10,7 +10,7 @@ Conecta dos clientes (Ana y Luis), juega tres rondas y calcula sobre los mensaje
   Ronda 2: caminar hacia el borde (velocidad máxima y caída fuera de la arena).
   Ronda 3: carga, embestida y enfriamiento.
 
-IMPORTANTE: no debe haber otros clientes con `hello` hecho (por ejemplo wscat
+IMPORTANTE: crea su PROPIA sala (puede haber otras partidas en marcha), pero nadie más debe entrar en ella (por ejemplo wscat
 abiertos), porque entrarían en la ronda y los números no serían los esperados.
 
 Los valores esperados salen de server/config.py, no se repiten aquí. Todos los
@@ -193,6 +193,20 @@ class Report:
         return any(s == "FAIL" for s, _, _ in self.lines)
 
 
+def wait_for(client: Client, kind: str) -> dict:
+    """Siguiente mensaje de ese tipo (se saltan los demás: rooms, roster...)."""
+    deadline = time.monotonic() + WAIT_TIMEOUT_S
+    while True:
+        try:
+            msg = client.inbox.get(timeout=max(0.01, deadline - time.monotonic()))
+        except queue.Empty:
+            raise TimeoutError(f"no llegó {kind} a tiempo") from None
+        if msg["t"] == kind:
+            return msg
+        if msg["t"] in ("closed", "error"):
+            raise ConnectionError(f"el servidor cortó la conexión: {msg}")
+
+
 def next_round_playing(a: Client) -> dict:
     """Espera a la siguiente ronda (fin de la anterior + cuenta atrás) y devuelve su primer `playing`."""
     # La sala no arranca sola: se espera a estar en `waiting` (una orden dada antes
@@ -345,7 +359,11 @@ def main() -> int:
         a, b = Client("Ana", args.port), Client("Luis", args.port)
         a.join()
         b.join()
-        a.send({"t": "start"})     # Ana entró primero: es la anfitriona
+        a.send({"t": "create"})                       # Ana crea la sala: es la anfitriona
+        room_id = wait_for(a, "room")["id"]
+        b.send({"t": "join", "room": room_id})
+        wait_for(b, "room")
+        a.send({"t": "start"})
         round1(a, b, cfg, rep)
         round2(a, cfg, rep, b)
         round3(a, cfg, rep, b)

@@ -2,13 +2,16 @@
 
 Cada tick:
   1. Ejecuta los comandos de membresía (Connect/Disconnect).
-  2. Ejecuta las entradas, como máximo MAX_INPUTS_PER_CLIENT_PER_TICK por cliente.
-  3. Avanza la fase de la ronda (patrón State).
-  4. Codifica el estado UNA vez y deja ese mismo objeto bytes en el buzón de
-     cada observador que toque según su política (Strategy).
+  2. Ejecuta las entradas (moverse, cargar, iniciar, crear/unirse/salir de sala),
+     como máximo MAX_INPUTS_PER_CLIENT_PER_TICK por cliente.
+  3. Avanza la fase de CADA sala (patrón State).
+  4. Avisa a cada cliente de lo suyo: rechazos, cambio de sala, lista de salas
+     (vestíbulo), lista de jugadores (sala) y estado (sala). Cada mensaje se
+     codifica UNA vez y ese mismo objeto bytes se entrega a todos sus
+     destinatarios.
 
 tick() es síncrono: no tiene ningún await. Por eso nada puede intercalarse
-mientras modifica el mundo o recorre la lista de observadores, y por eso se
+mientras modifica el vestíbulo o recorre la lista de observadores, y por eso se
 puede probar con pytest llamándolo directamente, sin event loop ni sockets.
 El único await del bucle es el asyncio.sleep() ENTRE ticks, nunca sobre un socket.
 """
@@ -23,41 +26,48 @@ from server.application.ports import (
 from server.application.send_policies import SendPolicy
 from server.application.session_commands import MembershipCommand
 from server.config import Config
-from server.domain.commands import Command
-from server.domain.round_states import RoundState
-from server.domain.world import World
+from server.domain.commands import Command, HallCommand
+from server.domain.hall import Hall
+from server.domain.room import Room
 from server.metrics import Metrics
 
 log = logging.getLogger(__name__)
 
 
 class GameSession:
-    def __init__(self, config: Config, world: World, initial_state: RoundState,
-                 encoder: SnapshotEncoder, policies: dict[str, SendPolicy],
-                 metrics: Metrics) -> None:
+    def __init__(self, config: Config, hall: Hall, encoder: SnapshotEncoder,
+                 policies: dict[str, SendPolicy], metrics: Metrics) -> None:
         self._cfg = config
-        self.world = world
-        self._state = initial_state
+        self.hall = hall
         self._encoder = encoder
-        self._policies = policies
+        self._policies = policies          # {fase: política de envío}
         self._metrics = metrics
         self._tick = 0
         self._observers: dict[int, SnapshotObserver] = {}
-        # Ids (en orden de cola) del último roster enviado. El orden también
-        # cuenta: cada ronda manda a quienes jugaron al final de la cola, y el
-        # cliente deduce de ese orden en qué turno le toca.
-        self._last_roster: tuple[tuple[int, ...], int | None] = ((), None)
+        # Última sala de la que se AVISÓ a cada cliente (None = vestíbulo). El
+        # tick compara con la real y manda `room` solo si cambió: no hace falta
+        # que cada comando se acuerde de avisar.
+        self._announced_room: dict[int, int | None] = {}
+        # Lista de salas ya enviada a cada cliente del vestíbulo, por IDENTIDAD
+        # del objeto bytes: se codifica una vez por cambio y se compara con `is`.
+        self._rooms_sent: dict[int, bytes | None] = {}
+        self._rooms_data: bytes = b""
+        # None (no `()`): con cero salas el resumen vacío coincidiría con el inicial y
+        # el primer cliente recibiría b"" en vez de la lista.
+        self._rooms_summary: tuple | None = None
+        # Último roster enviado por sala: (ids en orden de llegada, anfitrión).
+        self._last_roster: dict[int, tuple[tuple[int, ...], int | None]] = {}
 
         # Cola productor-consumidor: N readers producen y el tick consume.
         # Acotada: si un cliente inunda, la memoria no crece; se descarta.
-        self._inputs: asyncio.Queue[tuple[int, Command]] = asyncio.Queue(config.INPUT_QUEUE_SIZE)
+        self._inputs: asyncio.Queue[tuple[int, Command | HallCommand]] = asyncio.Queue(config.INPUT_QUEUE_SIZE)
         # Membresía: nunca descarta (ver session_commands.py). deque.append
         # sin await en medio es atómico en un solo hilo.
         self._membership: deque[MembershipCommand] = deque()
 
     # ------------- lo que llaman las ClientSession (otras tareas) -------------
 
-    def submit_input(self, player_id: int, command: Command) -> bool:
+    def submit_input(self, player_id: int, command: Command | HallCommand) -> bool:
         """Nunca bloquea: put_nowait. Devuelve False si se descartó."""
         try:
             self._inputs.put_nowait((player_id, command))
@@ -71,31 +81,39 @@ class GameSession:
 
     # ------------- lo que llaman los comandos (dentro del tick) -------------
 
-    def subscribe(self, player_id: int, observer: SnapshotObserver) -> None:
+    def subscribe(self, player_id: int, name: str, observer: SnapshotObserver) -> None:
+        self.hall.connect(player_id, name)
         self._observers[player_id] = observer
-        player = self.world.players[player_id]
-        welcome = WelcomeInfo(player.id, player.color, self.world.role_of(player_id),
+        self._announced_room[player_id] = None     # empieza en el vestíbulo
+        self._rooms_sent[player_id] = None
+        welcome = WelcomeInfo(player_id, self.hall.color_of(player_id),
                               self._cfg.ARENA_RADIUS, self._cfg.DISC_RADIUS,
-                              self._cfg.MAX_ACTIVE_PLAYERS, self._cfg.DASH_COOLDOWN_S,
+                              self._cfg.MAX_ROOM_PLAYERS, self._cfg.DASH_COOLDOWN_S,
                               self._cfg.MIN_CHARGE_S / self._cfg.CHARGE_MAX_S,
                               self._cfg.MIN_PLAYERS_TO_START)
-        # Se publica en el MISMO tick en que se suscribe, antes del estado de
-        # este tick: el writer del cliente siempre ve el welcome primero.
+        # Se publica en el MISMO tick en que se suscribe, antes de cualquier
+        # otro mensaje: el writer del cliente siempre ve el welcome primero.
         self._notify(observer, observer.on_welcome, self._encoder.encode_welcome(welcome))
 
     def unsubscribe(self, player_id: int) -> None:
+        self.hall.disconnect(player_id)
         self._observers.pop(player_id, None)
+        self._announced_room.pop(player_id, None)
+        self._rooms_sent.pop(player_id, None)
 
     def stats(self) -> dict:
         """Lectura para /metrics. Solo lee y no hay await: ve un estado
         coherente (el tick no puede correr a la mitad)."""
-        playing = sum(1 for pid in self._observers if self.world.is_playing(pid))
+        rooms = self.hall.rooms.values()
+        playing = sum(r.world.player_count() for r in rooms if r.phase == "playing")
+        in_rooms = sum(r.world.player_count() for r in rooms)
         return {
             "tick": self._tick,
-            "phase": self._state.PHASE,
+            "rooms": len(self.hall.rooms),
             "subscribed": len(self._observers),
             "playing": playing,
-            "spectators": len(self._observers) - playing,
+            "in_rooms": in_rooms,
+            "lobby": len(self._observers) - in_rooms,
         }
 
     # ------------- el tick -------------
@@ -104,28 +122,11 @@ class GameSession:
         self._tick += 1
         self._apply_membership()
         self._apply_inputs()
-        self._state = self._state.on_tick(self.world)
-        self._publish_roster_if_changed()
-        self._publish()
-
-    def _publish_roster_if_changed(self) -> None:
-        """El roster (id, nombre y color de TODOS, en orden de cola, más el anfitrión) solo se
-        envía cuando cambia la lista de ids o su ORDEN: cuando alguien entra o
-        sale, o cuando empieza una ronda y los que juegan pasan al final de la
-        cola. Nombres y colores no cambian durante la sesión. Va a todos los
-        observadores sin importar su política de envío, y completo cada vez
-        (uno nuevo reemplaza al anterior, así que si el buzón de un cliente
-        lento pisa uno, no se pierde nada)."""
-        ids = tuple(self.world.queue())   # el orden del roster ES la cola
-        host = self.world.host()          # si el anfitrión se va, cambia aunque la lista no
-        if (ids, host) == self._last_roster:
-            return
-        self._last_roster = (ids, host)
-        players = self.world.players
-        entries = tuple(RosterEntry(i, players[i].name, players[i].color) for i in ids)
-        data = self._encoder.encode_roster(entries, host)   # UNA vez, como el estado
-        for observer in self._observers.values():
-            self._notify(observer, observer.on_roster, data)
+        self.hall.step()                 # la fase de cada sala
+        self._publish_notices()
+        self._publish_rooms_if_changed()
+        self._publish_rosters_if_changed()
+        self._publish_states()
 
     def _apply_membership(self) -> None:
         while self._membership:
@@ -145,26 +146,78 @@ class GameSession:
             if count > self._cfg.MAX_INPUTS_PER_CLIENT_PER_TICK:
                 self._metrics.inputs_dropped_rate += 1
                 continue
-            command.execute(self.world)
+            command.run(self.hall)       # doble despacho: sala o vestíbulo, el tick no distingue
             self._metrics.inputs_applied += 1
 
-    def _snapshot(self) -> Snapshot:
+    def _publish_notices(self) -> None:
+        """Rechazos (sala llena...) y cambios de sala. Van por la casilla de avisos
+        del cliente: reemplaza al anterior, y el último aviso es el que importa."""
+        for player_id, code in self.hall.drain_rejections():
+            observer = self._observers.get(player_id)
+            if observer is not None:
+                self._notify(observer, observer.on_notice, self._encoder.encode_error(code))
+        for player_id, observer in self._observers.items():
+            room = self.hall.room_of(player_id)
+            room_id = room.id if room else None
+            if self._announced_room.get(player_id) != room_id:
+                self._announced_room[player_id] = room_id
+                self._rooms_sent[player_id] = None          # al volver al vestíbulo necesita la lista
+                self._notify(observer, observer.on_notice, self._encoder.encode_room(room_id))
+
+    def _publish_rooms_if_changed(self) -> None:
+        """Lista de salas para quienes están en el vestíbulo. Se codifica solo
+        cuando cambia, y cada cliente la recibe una vez por cambio (o al llegar)."""
+        summary = self.hall.summary()
+        if summary != self._rooms_summary:
+            self._rooms_summary = summary
+            self._rooms_data = self._encoder.encode_rooms(summary)
+        for player_id in self.hall.lobby_members():
+            if self._rooms_sent.get(player_id) is not self._rooms_data:
+                observer = self._observers.get(player_id)
+                if observer is not None:
+                    self._rooms_sent[player_id] = self._rooms_data
+                    self._notify(observer, observer.on_rooms, self._rooms_data)
+
+    def _publish_rosters_if_changed(self) -> None:
+        """El roster de cada sala (id, nombre, color de sus jugadores y su
+        anfitrión) solo se envía cuando cambia la lista o el anfitrión. Nombres
+        y colores no cambian durante la sesión. Va completo cada vez (uno
+        nuevo reemplaza al anterior: si el buzón de un cliente lento pisa uno,
+        no se pierde nada)."""
+        for room in self.hall.rooms.values():
+            players = room.world.players
+            key = (tuple(players), room.world.host())
+            if self._last_roster.get(room.id) == key:
+                continue
+            self._last_roster[room.id] = key
+            entries = tuple(RosterEntry(p.id, p.name, p.color) for p in players.values())
+            data = self._encoder.encode_roster(entries, key[1])   # UNA vez, como el estado
+            for player_id in players:
+                if (observer := self._observers.get(player_id)) is not None:
+                    self._notify(observer, observer.on_roster, data)
+        for room_id in set(self._last_roster) - set(self.hall.rooms):
+            del self._last_roster[room_id]                        # la sala ya no existe
+
+    def _snapshot(self, room: Room) -> Snapshot:
         cfg = self._cfg
+        world = room.world
         discs = tuple(
             DiscView(d.id, d.pos.x, d.pos.y, d.charge_time / cfg.CHARGE_MAX_S, d.alive)
-            for d in self.world.discs.values()
+            for d in world.discs.values()
         )
-        return Snapshot(self._tick, self._state.PHASE, self._state.remaining_s,
-                        self._state.winner, dict(self.world.scores), discs)
+        return Snapshot(self._tick, room.phase, room.state.remaining_s,
+                        room.state.winner, dict(world.scores), discs)
 
-    def _publish(self) -> None:
-        data = self._encoder.encode_state(self._snapshot())   # UNA vez por tick
-        # Se recorre el dict sin riesgo de "dictionary changed size during
-        # iteration": solo el tick lo modifica, y on_snapshot no hace await.
-        for player_id, observer in self._observers.items():
-            policy = self._policies[self.world.role_of(player_id)]
-            if policy.should_send(self._tick):
-                self._notify(observer, observer.on_snapshot, data)
+    def _publish_states(self) -> None:
+        # Se recorre sin riesgo de "dictionary changed size during iteration":
+        # solo el tick modifica estas estructuras, y on_snapshot no hace await.
+        for room in self.hall.rooms.values():
+            if not self._policies[room.phase].should_send(self._tick):
+                continue
+            data = self._encoder.encode_state(self._snapshot(room))   # UNA vez por sala y tick
+            for player_id in room.world.players:
+                if (observer := self._observers.get(player_id)) is not None:
+                    self._notify(observer, observer.on_snapshot, data)
 
     @staticmethod
     def _notify(observer: SnapshotObserver, method, data: bytes) -> None:

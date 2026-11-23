@@ -2,7 +2,7 @@
 
 Uso (con el servidor corriendo; mira `tools/monitor.py` a la vez):
     .venv/bin/python tools/slow_client.py [--mode stall|trickle] [--count 1] [--seconds 60]
-                                          [--rcvbuf 1024] [--port 8080] [--keepalive]
+                                          [--rcvbuf 1024] [--port 8080] [--keepalive] [--room ID]
 
 Qué demuestra (RNF-06, backpressure): un cliente que no lee NO debe frenar al
 servidor ni a los demás.
@@ -41,6 +41,10 @@ async def lazy_client(index: int, args: argparse.Namespace, fates: list[str]) ->
         return
     transport = conn.writer.transport
     await conn.send_json({"t": "hello", "name": f"lento{index}"})
+    if args.room is not None:
+        # Entra a esa sala ANTES de dejar de leer: solo dentro de una ronda en marcha
+        # recibe estados a 30 Hz y llena su búfer (en el vestíbulo casi no le llega nada).
+        await conn.send_json({"t": "join", "room": args.room})
     started = time.monotonic()
     # Un socket propio (dup del descriptor) para mirar si el servidor nos cortó, SIN enviar
     # nada: cualquier byte que mandáramos renovaría el plazo de inactividad del servidor
@@ -92,6 +96,8 @@ async def main() -> None:
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--rcvbuf", type=int, default=1024, help="SO_RCVBUF en bytes (pequeño = se llena antes)")
+    parser.add_argument("--room", type=int, default=None,
+                        help="id de la sala a la que unirse antes de dejar de leer")
     parser.add_argument("--keepalive", action="store_true",
                         help="manda un ping vacío cada 5 s para que el servidor no lo expulse por inactividad")
     parser.add_argument("--port", type=int, default=8080)

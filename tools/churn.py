@@ -9,8 +9,9 @@ limpie) los descriptores, las conexiones activas y los CLOSE_WAIT deben volver
 al nivel de antes. Un `+N` en cualquiera de ellos es una fuga.
 
 Formas de conexión (registro, no `if/elif`):
-  clean      hello, lee un estado y cierra con close 1000.
+  clean      hello, lee la lista de salas y cierra con close 1000.
   abrupt     hello y corte brusco del TCP (RST), como un cable desenchufado.
+  rooms      crea y abandona salas y se va de golpe estando dentro de una.
   no_hello   abre el WebSocket y se va sin saludar.
   bad_json   manda basura: espera error + close 1008.
   bad_frame  manda una trama sin máscara: espera close 1002.
@@ -43,10 +44,26 @@ async def wait_close_code(conn: WsConn) -> int | None:
 async def clean(port: int) -> str:
     conn = await connect(port)
     await conn.send_json({"t": "hello", "name": "churn"})
-    while (await asyncio.wait_for(conn.recv(), EXPECT_TIMEOUT_S))[1][:12] != b'{"t":"state"':
+    while not (await asyncio.wait_for(conn.recv(), EXPECT_TIMEOUT_S))[1].startswith(b'{"t":"rooms",'):
         pass
     await conn.send(OP_CLOSE, b"\x03\xe8")
     await conn.close()
+    return "ok"
+
+
+async def room_churn(port: int) -> str:
+    """Crea una sala, sale, vuelve a crear y se va de golpe: ejercita que las salas
+    vacías desaparezcan y que irse DENTRO de una sala libere todo."""
+    conn = await connect(port)
+    await conn.send_json({"t": "hello", "name": "churn"})
+    for _ in range(2):
+        await conn.send_json({"t": "create"})
+        while not (await asyncio.wait_for(conn.recv(), EXPECT_TIMEOUT_S))[1].startswith(b'{"t":"room","id"'):
+            pass
+        await conn.send_json({"t": "leave"})
+    await conn.send_json({"t": "create"})
+    await asyncio.wait_for(conn.recv(), EXPECT_TIMEOUT_S)
+    conn.abort()
     return "ok"
 
 
@@ -98,7 +115,7 @@ async def mute(port: int) -> str:
     return "ok" if not data and time.monotonic() - started < MUTE_CUT_LIMIT_S else "no lo cortó"
 
 
-SCENARIOS = {"clean": clean, "abrupt": abrupt, "no_hello": no_hello, "bad_json": bad_json,
+SCENARIOS = {"clean": clean, "abrupt": abrupt, "rooms": room_churn, "no_hello": no_hello, "bad_json": bad_json,
              "bad_frame": bad_frame, "http": http_page}
 
 

@@ -1,8 +1,9 @@
-"""Frecuencia de envío por rol (patrón Strategy).
+"""Frecuencia de envío por FASE de la sala (patrón Strategy).
 
-GameSession elige la política con un registro {rol: política}, sin `if rol ==`.
-Una política nueva (p. ej. "cada 2 ticks para conexiones lentas") es una
-clase nueva; el tick no se toca.
+GameSession elige la política con un registro {fase: política}, sin
+`if fase == ...`. Mientras se juega, 30 Hz; en espera, cuenta atrás y
+resultados nada se mueve y basta una fracción. Una política nueva es una clase
+nueva; el tick no se toca.
 """
 
 from abc import ABC, abstractmethod

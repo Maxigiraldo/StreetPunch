@@ -28,17 +28,14 @@ def test_join_registra_con_color(world):
     JoinCommand(7, "Ana").execute(world)
     assert world.players[7].name == "Ana"
     assert world.players[7].color in CFG.PLAYER_COLORS
-    assert not world.is_playing(7)  # nunca entra a mitad de ronda
+    assert 7 not in world.discs      # entrar no coloca disco: eso lo hace start_round
 
 
-def test_start_round_limita_a_max_activos_y_rota_la_cola(world):
-    join(world, CFG.MAX_ACTIVE_PLAYERS + 2)
+def test_start_round_coloca_a_todos_los_de_la_sala(world):
+    """Sin cola ni espectadores: el tope lo pone el Hall al dejar entrar."""
+    join(world, CFG.MAX_ROOM_PLAYERS)
     world.start_round()
-    assert len(world.discs) == CFG.MAX_ACTIVE_PLAYERS
-    waiting = [CFG.MAX_ACTIVE_PLAYERS + 1, CFG.MAX_ACTIVE_PLAYERS + 2]
-    assert not any(world.is_playing(i) for i in waiting)
-    # Los que esperaban quedan primeros en la cola para la siguiente ronda.
-    assert world.queue()[:2] == waiting
+    assert sorted(world.discs) == sorted(world.players)
 
 
 def test_discos_nacen_mirando_al_centro(world):
@@ -137,83 +134,9 @@ def test_main_arma_la_arena_con_el_margen_de_la_config():
 
     from server.main import build
     app = build(dataclasses.replace(CFG, PORT=0), {})   # puerto 0: nunca choca con un servidor en marcha
-    arena = app.game.world.arena
+    hall = app.game.hall
+    hall.connect(1, "Ana")
+    hall.create_room(1)
+    arena = hall.room_of(1).world.arena      # la arena con que main arma cada sala
     assert arena.elimination_radius == CFG.ARENA_RADIUS + CFG.DISC_RADIUS * CFG.ELIMINATION_MARGIN_DISCS
     app.listener._sock.close()
-
-
-def test_los_que_llegan_despues_de_empezar_la_ronda_juegan_antes_que_los_que_ya_jugaron(world):
-    """El fallo visto con 50 bots: quien jugó la ronda 1 volvía a jugar la 2
-    porque los que llegaron después quedaban detrás de él en la cola."""
-    join(world, CFG.MAX_ACTIVE_PLAYERS)
-    world.start_round()
-    first = set(world.discs)
-    for pid in range(100, 100 + CFG.MAX_ACTIVE_PLAYERS):       # llegan con la ronda ya en marcha
-        world.add_player(pid, f"tarde{pid}")
-    world.end_round()
-    world.start_round()
-    assert set(world.discs).isdisjoint(first)                  # ninguno repite
-
-
-def test_rotacion_justa_todos_juegan_antes_de_que_alguien_repita(world):
-    total = CFG.MAX_ACTIVE_PLAYERS * 3 + 5
-    join(world, total)
-    played: list[int] = []
-    for _ in range(4):                                         # 4 rondas: 3 grupos completos + los 5 restantes
-        world.start_round()
-        played += list(world.discs)
-        world.end_round()
-    assert set(played[: total]) == set(range(1, total + 1))    # las primeras `total` plazas son todos distintos
-
-
-# ---------------- justicia de la rotación (informe de Max: "el anfitrión casi siempre juega") ----------------
-
-def play_rounds(world: World, rounds: int) -> dict[int, int]:
-    played = {pid: 0 for pid in world.players}
-    for _ in range(rounds):
-        world.start_round()
-        for pid in world.discs:
-            played[pid] += 1
-        world.end_round()
-    return played
-
-
-@pytest.mark.parametrize("n", [14, 20, 50])
-def test_rotacion_reparte_las_rondas_por_igual(n):
-    """Con 14 jugadores y 12 plazas, desempatar por orden de llegada hacía que los
-    jugadores 1 a 10 (anfitrión incluido) jugaran TODAS las rondas."""
-    world = World(CFG, Arena(CFG.ARENA_RADIUS))
-    for i in range(1, n + 1):
-        world.add_player(i, f"p{i}")
-    played = play_rounds(world, 3 * n)
-    assert set(played.values()) == {3 * CFG.MAX_ACTIVE_PLAYERS}   # exactamente igual para todos
-
-
-def test_el_anfitrion_se_queda_fuera_alguna_vez_si_hay_mas_jugadores_que_plazas():
-    world = World(CFG, Arena(CFG.ARENA_RADIUS))
-    for i in range(1, 15):
-        world.add_player(i, f"p{i}")
-    host = world.host()
-    sat_out = 0
-    for _ in range(14):                       # 14 rondas = una vuelta completa de la cola
-        world.start_round()
-        sat_out += host not in world.discs
-        world.end_round()
-    assert sat_out >= 1
-
-
-def test_nadie_espera_mas_de_una_vuelta_de_cola():
-    """Cota de espera: con n jugadores y k plazas, nadie pasa más de ceil(n/k) rondas sin jugar."""
-    n, k = 30, CFG.MAX_ACTIVE_PLAYERS
-    world = World(CFG, Arena(CFG.ARENA_RADIUS))
-    for i in range(1, n + 1):
-        world.add_player(i, f"p{i}")
-    since = {pid: 0 for pid in world.players}
-    worst = 0
-    for _ in range(60):
-        world.start_round()
-        for pid in world.players:
-            since[pid] = 0 if pid in world.discs else since[pid] + 1
-            worst = max(worst, since[pid])
-        world.end_round()
-    assert worst <= -(-n // k)

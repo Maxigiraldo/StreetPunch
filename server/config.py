@@ -79,10 +79,11 @@ class Config:
     # tick: fluido con interpolación de ~100 ms en el cliente.
     TICK_HZ: int = 30
 
-    # Los espectadores solo miran: 10 Hz ahorra 2/3 de su tráfico.
+    # Frecuencia del estado mientras la sala NO está jugando (espera, cuenta
+    # atrás, resultados): nada se mueve, así que 10 Hz ahorra 2/3 del tráfico.
     # Debe dividir a TICK_HZ (se valida abajo) porque EveryNthTick envía uno
     # de cada N ticks.
-    SPECTATOR_HZ: int = 10
+    QUIET_PHASE_HZ: int = 10
 
     # Meta medida del percentil 99 del tick: 5 ms es el 15 % de los 33 ms
     # disponibles. Es una meta para las métricas, no una regla que se imponga.
@@ -154,9 +155,17 @@ class Config:
     # Reglas de la ronda
     # ------------------------------------------------------------------
 
-    # Jugadores en la arena; el resto espera como espectador. 12 cabe en
-    # pantalla. El tráfico crece como N x N (N discos a N clientes).
-    MAX_ACTIVE_PLAYERS: int = 12
+    # Tope de jugadores POR SALA. Todos los de la sala juegan cada ronda: no hay
+    # cola ni espectadores (con una sola arena y cola, la gente esperaba "volando"
+    # y la rotación se sentía injusta). Con la sala llena no se puede entrar: se
+    # elige otra o se crea una. 8 discos caben holgados en la arena (300 px de
+    # radio) y el tráfico de cada sala crece como N x N.
+    MAX_ROOM_PLAYERS: int = 8
+
+    # Tope de salas a la vez: acota la memoria y el trabajo del tick (cada sala
+    # corre su propia física). 25 salas de 4 ya usan las 100 conexiones; es un
+    # límite de seguridad, no uno que se alcance jugando.
+    MAX_ROOMS: int = 25
 
     # Con uno solo no hay partida.
     MIN_PLAYERS_TO_START: int = 2
@@ -261,9 +270,9 @@ class Config:
         return 1.0 / self.TICK_HZ
 
     @property
-    def SPECTATOR_EVERY_N_TICKS(self) -> int:
-        """Cada cuántos ticks recibe estado un espectador (para EveryNthTick)."""
-        return self.TICK_HZ // self.SPECTATOR_HZ
+    def QUIET_EVERY_N_TICKS(self) -> int:
+        """Cada cuántos ticks se envía el estado de una sala que no juega (EveryNthTick)."""
+        return self.TICK_HZ // self.QUIET_PHASE_HZ
 
     # ------------------------------------------------------------------
     # Validación: una configuración incoherente debe fallar al arrancar,
@@ -291,14 +300,17 @@ class Config:
         if self.SLIDE_FRICTION_PER_S > self.FRICTION_PER_S:
             errors.append("SLIDE_FRICTION_PER_S no puede superar FRICTION_PER_S")
 
-        if self.TICK_HZ % self.SPECTATOR_HZ != 0:
-            errors.append("SPECTATOR_HZ debe dividir exactamente a TICK_HZ")
+        if self.TICK_HZ % self.QUIET_PHASE_HZ != 0:
+            errors.append("QUIET_PHASE_HZ debe dividir exactamente a TICK_HZ")
 
-        if not 2 <= self.MIN_PLAYERS_TO_START <= self.MAX_ACTIVE_PLAYERS:
-            errors.append("MIN_PLAYERS_TO_START debe estar entre 2 y MAX_ACTIVE_PLAYERS")
+        if not 2 <= self.MIN_PLAYERS_TO_START <= self.MAX_ROOM_PLAYERS:
+            errors.append("MIN_PLAYERS_TO_START debe estar entre 2 y MAX_ROOM_PLAYERS")
 
-        if self.MAX_ACTIVE_PLAYERS > self.MAX_CONNECTIONS:
-            errors.append("MAX_ACTIVE_PLAYERS no puede superar MAX_CONNECTIONS")
+        if self.MAX_ROOM_PLAYERS > self.MAX_CONNECTIONS:
+            errors.append("MAX_ROOM_PLAYERS no puede superar MAX_CONNECTIONS")
+
+        if self.MAX_ROOMS < 1:
+            errors.append("MAX_ROOMS debe ser al menos 1")
 
         # Con inactividad <= intervalo de ping, un cliente sano se cerraría
         # antes de tener oportunidad de responder.

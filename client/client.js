@@ -34,10 +34,8 @@ const BIG_FONT = "700 72px system-ui, sans-serif";
 const MID_FONT = "700 34px system-ui, sans-serif";
 const SMALL_FONT = "500 18px system-ui, sans-serif";
 const OVERLAY_LINE_GAP_PX = 44;    // separación entre el texto grande y el pequeño
-const BANNER_TOP_PX = 34;          // el aviso de espectador va arriba del canvas
 const OVERLAY_COLOR = "#ffffff";
 const OVERLAY_SHADOW = "#000000";
-const SPECTATOR_HINT = "Eres espectador: entras en una próxima ronda";
 const COOLDOWN_RING_GAP_PX = 9;    // el anillo de enfriamiento va por fuera del de carga
 const COOLDOWN_COLOR = "#8a8f98";
 const MS_PER_S_FLOAT = 1000;
@@ -45,7 +43,7 @@ const MS_PER_S_FLOAT = 1000;
 // ---- Interpolación (P5c) ----
 const INTERP_DELAY_MS = 100;       // se dibuja ~100 ms en el pasado (docs/diseno.md, P5)
 const INTERVAL_FACTOR = 1.5;       // el retraso nunca baja de 1,5 intervalos entre estados:
-                                   // un espectador recibe cada 100 ms y necesita 2 estados que mezclar
+                                   // esperando/cuenta atrás llegan cada 100 ms y hacen falta 2 que mezclar
 const INTERVAL_SMOOTHING = 0.1;    // peso de cada muestra al promediar el intervalo (media móvil)
 const MAX_SNAPSHOTS = 32;          // tope de estados guardados: acota la memoria si el navegador se detiene
 
@@ -58,8 +56,18 @@ const PHASE_TEXT = {
   playing: "¡A pelear!",
   round_over: "Fin de la ronda",
 };
-const STATUS_TEXT = { playing: "en juego", eliminated: "eliminado", spectator: "espectador",
-                      host: "anfitrión", inroom: "en la sala" };
+const STATUS_TEXT = { playing: "en juego", eliminated: "eliminado", host: "anfitrión", inroom: "en la sala" };
+
+// Rechazos del servidor que NO cierran la conexión (el cliente puede intentar otra cosa).
+const ERROR_TEXT = {
+  room_full: "Esa sala está llena. Elige otra o crea una.",
+  room_busy: "Esa sala está jugando. Espera a que termine o crea otra.",
+  no_room: "Esa sala ya no existe.",
+  too_many_rooms: "Hay demasiadas salas. Únete a una.",
+  already_in_room: "Ya estás en una sala.",
+  not_in_room: "No estás en una sala.",
+};
+const PHASE_LABEL = { waiting: "en espera", countdown: "empezando", playing: "jugando", round_over: "terminando" };
 
 const els = {
   form: document.getElementById("join"),
@@ -69,6 +77,11 @@ const els = {
   hud: document.getElementById("hud"),
   scores: document.getElementById("scores"),
   start: document.getElementById("start"),
+  lobby: document.getElementById("lobby"),
+  rooms: document.getElementById("rooms"),
+  create: document.getElementById("create"),
+  leave: document.getElementById("leave"),
+  game: document.getElementById("game"),
   canvas: document.getElementById("arena"),
 };
 const ctx = els.canvas.getContext("2d");
@@ -76,7 +89,9 @@ const ctx = els.canvas.getContext("2d");
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
 const session = {
   socket: null, me: null, color: null, arena: DEFAULT_ARENA, latest: null, phase: null,
-  maxPlayers: null,    // jugadores por ronda (del welcome): para calcular en qué turno entra un espectador
+  maxPlayers: null,    // tope de jugadores por sala (del welcome)
+  room: null,          // id de la sala en que estoy; null = en el vestíbulo
+  rooms: [],           // lista de salas (solo llega mientras estoy en el vestíbulo)
   cooldownS: 0,        // enfriamiento de la embestida (del welcome)
   host: null,          // id del anfitrión de la sala (el primero en llegar)
   roster: new Map(),   // id -> { name, color }, tal como lo manda el servidor
@@ -157,6 +172,19 @@ const handlers = {
     session.minPlayers = msg.min_players;
     setStatus(`Conectado como #${msg.id}`);
   },
+  rooms(msg) {
+    // Siempre llega la lista completa: se reemplaza entera.
+    session.rooms = msg.rooms;
+    renderRooms();
+  },
+  room(msg) {
+    // Entré a una sala (id) o volví al vestíbulo (null): empieza una "pantalla" nueva y
+    // lo de la anterior (estado, jugadores, controles, interpolación) no vale.
+    session.room = msg.id;
+    resetRoomState();
+    showView();
+    setStatus(msg.id === null ? "Elige una sala o crea una." : `Estás en la sala ${msg.id}.`);
+  },
   roster(msg) {
     // Siempre llega la lista completa: se reemplaza entera, no se mezcla.
     session.host = msg.host;
@@ -170,11 +198,14 @@ const handlers = {
     // El cambio de fase se detecta comparando con la anterior: no hay mensaje aparte.
     if (msg.phase !== session.phase) {
       session.phase = msg.phase;
+      // La frecuencia de envío cambia con la fase (10 Hz en espera, 30 Hz jugando): se
+      // olvida el intervalo medio para que el retraso de interpolación se recalcule.
+      timeline.interval = null;
       if (Object.hasOwn(phaseEntered, msg.phase)) phaseEntered[msg.phase]();
     }
   },
   error(msg) {
-    setStatus(`El servidor rechazó el mensaje: ${msg.code}`);
+    setStatus(ERROR_TEXT[msg.code] ?? `El servidor rechazó el mensaje: ${msg.code}`);
   },
 };
 
@@ -192,16 +223,61 @@ function onMessage(event) {
 
 // ---------------------------------------------------------------- conexión
 
-function connect(name) {
-  session.me = null;
+// Lo que pertenece a UNA sala: se borra al entrar a otra o al volver al vestíbulo.
+function resetRoomState() {
   session.latest = null;
   session.phase = null;
-  session.arena = DEFAULT_ARENA;
+  session.host = null;
   session.roster = new Map();
-  session.maxPlayers = null;
-  session.cooldownS = 0;
+  lastScoreKey = "";
+  lastHudTick = -1;
   resetTimeline();
   resetControls();
+  els.start.hidden = true;
+  els.scores.replaceChildren();
+}
+
+// Vestíbulo (lista de salas) o sala (partida), según dónde esté el jugador.
+function showView() {
+  const connected = session.socket !== null;
+  els.lobby.hidden = !(connected && session.room === null);
+  els.game.hidden = !(connected && session.room !== null);
+}
+
+// Las salas las crean otros jugadores y sus nombres también: solo textContent, nunca HTML.
+function renderRooms() {
+  if (session.rooms.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No hay salas todavía. Crea la primera.";
+    els.rooms.replaceChildren(empty);
+    return;
+  }
+  els.rooms.replaceChildren(...session.rooms.map((room) => {
+    const item = document.createElement("li");
+    item.className = "room";
+    const title = document.createElement("span");
+    title.textContent = `${room.name} · anfitrión ${room.host}`;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${room.players}/${room.max} · ${PHASE_LABEL[room.phase] ?? room.phase}`;
+    const join = document.createElement("button");
+    join.textContent = room.players >= room.max ? "Llena" : "Unirse";
+    join.disabled = !room.open;
+    join.addEventListener("click", () => send({ t: "join", room: room.id }));
+    item.append(title, meta, join);
+    return item;
+  }));
+}
+
+function connect(name) {
+  session.me = null;
+  session.arena = DEFAULT_ARENA;
+  session.maxPlayers = null;
+  session.cooldownS = 0;
+  session.room = null;
+  session.rooms = [];
+  resetRoomState();
   els.enter.disabled = true;
   // Sin esto el foco se queda en el campo de nombre y las teclas del juego se
   // escribirían ahí en vez de llegar al juego.
@@ -210,6 +286,7 @@ function connect(name) {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/ws`);
   session.socket = socket;
+  showView();          // el socket ya está asignado: muestra el vestíbulo en cuanto llegue la lista
   setStatus("Conectando…");
 
   // `hello` debe ser el primer mensaje (docs/protocolo.md §2).
@@ -219,9 +296,9 @@ function connect(name) {
     // 1008 = el servidor rechazó algo (el `error` previo dice qué); se conserva ese texto.
     if (event.code !== 1008) setStatus(`Desconectado (código ${event.code})`);
     session.socket = null;
-    session.host = null;
-    els.start.hidden = true;
-    resetControls();
+    session.room = null;
+    resetRoomState();
+    showView();
     els.enter.disabled = false;
   });
 }
@@ -364,6 +441,12 @@ window.addEventListener("blur", () => {
   setCharging(false);
 });
 
+els.create.addEventListener("click", () => send({ t: "create" }));
+els.leave.addEventListener("click", () => {
+  send({ t: "leave" });
+  els.leave.blur();   // que Espacio no vuelva a «pulsar» el botón
+});
+
 els.start.addEventListener("click", () => {
   send({ t: "start" });
   els.start.blur();   // que Espacio no vuelva a «pulsar» el botón en plena ronda
@@ -413,10 +496,10 @@ const overlayFor = {
     const enough = count >= (session.minPlayers ?? 2);
     if (isHost()) {
       return enough
-        ? ["Sala de espera", `${count} en la sala: pulsa «Iniciar partida» cuando estén todos`]
+        ? ["Sala de espera", `${count}/${session.maxPlayers} en la sala: pulsa «Iniciar partida» cuando estén todos`]
         : ["Sala de espera", `Eres el anfitrión. Faltan jugadores (mínimo ${session.minPlayers})`];
     }
-    return ["Sala de espera", `${nameOf(session.host)} iniciará la partida (${count} en la sala)`];
+    return ["Sala de espera", `${nameOf(session.host)} iniciará la partida (${count}/${session.maxPlayers} en la sala)`];
   },
   countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!"],
   round_over: (state) => {
@@ -447,7 +530,7 @@ function scoreRows(state) {
     color: info.color,
     wins: state.scores[id] ?? 0,
     status: state.phase === "waiting" ? (id === session.host ? "host" : "inroom")
-      : !inRound.has(id) ? "spectator" : inRound.get(id) ? "playing" : "eliminated",
+      : !inRound.has(id) ? "inroom" : inRound.get(id) ? "playing" : "eliminated",
     me: id === session.me,
   }));
   return rows.sort((a, b) => b.wins - a.wins);
@@ -492,20 +575,6 @@ function drawText(text, x, y, font, color = OVERLAY_COLOR) {
   ctx.fillText(text, x, y);
 }
 
-// Turno de un espectador: el orden del roster ES la cola. Quienes juegan esta ronda ya
-// están al final de ella; entre los demás (los que esperan) la posición dice cuándo entra:
-// cada ronda toma a los primeros `maxPlayers` de la cola.
-function spectatorHint(state) {
-  const playing = new Set(state.d.map((disc) => disc[0]));
-  const queue = [...session.roster.keys()].filter((id) => !playing.has(id));
-  const position = queue.indexOf(session.me) + 1;
-  if (position === 0 || !session.maxPlayers) return SPECTATOR_HINT;
-  const rounds = Math.ceil(position / session.maxPlayers);
-  return rounds === 1
-    ? `Espectador, turno ${position} en la cola: juegas en la próxima ronda`
-    : `Espectador, turno ${position} en la cola: juegas en ${rounds} rondas`;
-}
-
 function drawOverlay(state, cx, cy) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -514,10 +583,6 @@ function drawOverlay(state, cx, cy) {
     const isNumber = /^\d+$/.test(big); // las cuentas atrás van grandes; los textos, medianos
     drawText(big, cx, cy, isNumber ? BIG_FONT : MID_FONT);
     drawText(small, cx, cy + OVERLAY_LINE_GAP_PX, SMALL_FONT);
-  }
-  // En `waiting` aún no hay ronda de la que quedarse fuera: el aviso sería ruido.
-  if (session.me !== null && state.phase !== "waiting" && !amPlaying(state)) {
-    drawText(spectatorHint(state), cx, BANNER_TOP_PX, SMALL_FONT);
   }
 }
 

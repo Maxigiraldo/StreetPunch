@@ -164,7 +164,7 @@ def test_ningun_estado_lanza_excepciones_con_entradas_al_azar(ctx, world):
 # ---------------- sala de espera con anfitrión ----------------
 
 def test_la_sala_no_arranca_sola(ctx, world):
-    join(world, CFG.MAX_ACTIVE_PLAYERS)          # ni siquiera llena
+    join(world, CFG.MAX_ROOM_PLAYERS)          # ni siquiera llena
     assert isinstance(tick(Waiting(ctx), world, 500), Waiting) and world.discs == {}
 
 

@@ -9,7 +9,11 @@ from server.adapters.codec import JsonFrameEncoder, MessageError, game_codec, he
 from server.adapters.ws_frames import CloseCode
 from server.application.ports import DiscView, RosterEntry, Snapshot, WelcomeInfo
 from server.config import Config
-from server.domain.commands import ChargeCommand, JoinCommand, MoveCommand
+from server.domain.commands import (
+    ChargeCommand, CreateRoomCommand, JoinCommand, JoinRoomCommand, LeaveRoomCommand, MoveCommand,
+    StartCommand,
+)
+from server.domain.hall import RoomInfo
 
 CFG = Config()
 HELLO, GAME = hello_codec(CFG), game_codec()
@@ -111,10 +115,10 @@ def test_estado_sin_plazo_ms_null():
 
 
 def test_welcome_formato():
-    w = WelcomeInfo(7, "#e4572e", "spectator", 300.0, 24.0, 12, 1.5, 0.2, 2)
+    w = WelcomeInfo(7, "#e4572e", 300.0, 24.0, 8, 1.5, 0.2, 2)
     assert unframe(JsonFrameEncoder(CFG).encode_welcome(w)) == {
-        "t": "welcome", "id": 7, "color": "#e4572e", "role": "spectator",
-        "arena": {"radius": 300.0, "disc_radius": 24.0}, "max_players": 12, "dash_cooldown_s": 1.5,
+        "t": "welcome", "id": 7, "color": "#e4572e",
+        "arena": {"radius": 300.0, "disc_radius": 24.0}, "max_players": 8, "dash_cooldown_s": 1.5,
         "min_charge": 0.2, "min_players": 2}
 
 
@@ -128,3 +132,30 @@ def test_roster_formato():
 def test_salida_es_trama_de_texto_sin_mascara():
     data = JsonFrameEncoder(CFG).encode_error("bad_name")
     assert data[0] == 0x81 and not data[1] & 0x80
+
+
+def test_rooms_formato():
+    rooms = (RoomInfo(1, "Sala 1", 3, 8, "waiting", "Ana", True),
+             RoomInfo(2, "Sala 2", 8, 8, "playing", "Luis", False))
+    assert unframe(JsonFrameEncoder(CFG).encode_rooms(rooms)) == {"t": "rooms", "rooms": [
+        {"id": 1, "name": "Sala 1", "players": 3, "max": 8, "phase": "waiting", "host": "Ana", "open": True},
+        {"id": 2, "name": "Sala 2", "players": 8, "max": 8, "phase": "playing", "host": "Luis", "open": False}]}
+
+
+def test_room_formato_con_y_sin_sala():
+    enc = JsonFrameEncoder(CFG)
+    assert unframe(enc.encode_room(3)) == {"t": "room", "id": 3}
+    assert unframe(enc.encode_room(None)) == {"t": "room", "id": None}     # null = vestíbulo
+
+
+def test_mensajes_de_sala():
+    assert dec(GAME, {"t": "create"}) == CreateRoomCommand(7)
+    assert dec(GAME, {"t": "join", "room": 3}) == JoinRoomCommand(7, 3)
+    assert dec(GAME, {"t": "leave"}) == LeaveRoomCommand(7)
+    assert dec(GAME, {"t": "start"}) == StartCommand(7)
+
+
+@pytest.mark.parametrize("bad", [{"t": "join"}, {"t": "join", "room": "3"}, {"t": "join", "room": True},
+                                 {"t": "join", "room": 1.5}, {"t": "join", "room": None}])
+def test_join_con_sala_invalida_es_bad_message(bad):
+    assert error_of(GAME, bad)[0] == "bad_message"

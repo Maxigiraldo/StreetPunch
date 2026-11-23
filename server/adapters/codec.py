@@ -18,8 +18,12 @@ from collections.abc import Callable
 
 from server.adapters.ws_frames import CloseCode, FrameWriter
 from server.application.ports import RosterEntry, Snapshot, SnapshotEncoder, WelcomeInfo
+from server.domain.hall import RoomInfo
 from server.config import Config
-from server.domain.commands import ChargeCommand, Command, JoinCommand, MoveCommand, StartCommand
+from server.domain.commands import (
+    ChargeCommand, Command, CreateRoomCommand, HallCommand, JoinCommand, JoinRoomCommand,
+    LeaveRoomCommand, MoveCommand, StartCommand,
+)
 
 _AXIS_VALUES = (-1, 0, 1)
 _COMPACT = (",", ":")   # JSON sin espacios: menos bytes por tick
@@ -34,7 +38,7 @@ class MessageError(Exception):
         self.close_code = close_code
 
 
-Factory = Callable[[dict, int], Command]
+Factory = Callable[[dict, int], Command | HallCommand]
 
 
 class MessageCodec:
@@ -42,7 +46,7 @@ class MessageCodec:
         self._registry = registry
         self._unknown_code = unknown_code
 
-    def decode(self, payload: bytes, player_id: int) -> Command:
+    def decode(self, payload: bytes, player_id: int) -> Command | HallCommand:
         try:
             text = payload.decode("utf-8")
         except UnicodeDecodeError:
@@ -104,6 +108,21 @@ def _start(msg: dict, player_id: int) -> Command:
     return StartCommand(player_id)
 
 
+def _create_room(msg: dict, player_id: int) -> HallCommand:
+    return CreateRoomCommand(player_id)
+
+
+def _join_room(msg: dict, player_id: int) -> HallCommand:
+    room = msg.get("room")
+    if not _is_int(room):
+        raise MessageError("bad_message")
+    return JoinRoomCommand(player_id, room)
+
+
+def _leave_room(msg: dict, player_id: int) -> HallCommand:
+    return LeaveRoomCommand(player_id)
+
+
 def _second_hello(msg: dict, player_id: int) -> Command:
     raise MessageError("not_hello")
 
@@ -117,6 +136,9 @@ def game_codec() -> MessageCodec:
         "input": _input,
         "charge": _charge,
         "start": _start,
+        "create": _create_room,
+        "join": _join_room,
+        "leave": _leave_room,
         "hello": _second_hello,
     }, unknown_code="bad_message")
 
@@ -150,7 +172,7 @@ class JsonFrameEncoder(SnapshotEncoder):
 
     def encode_welcome(self, w: WelcomeInfo) -> bytes:
         return self._frame({
-            "t": "welcome", "id": w.id, "color": w.color, "role": w.role,
+            "t": "welcome", "id": w.id, "color": w.color,
             "arena": {"radius": w.arena_radius, "disc_radius": w.disc_radius},
             "max_players": w.max_players, "dash_cooldown_s": w.dash_cooldown_s,
             "min_charge": w.min_charge, "min_players": w.min_players,
@@ -159,6 +181,15 @@ class JsonFrameEncoder(SnapshotEncoder):
     def encode_roster(self, entries: tuple[RosterEntry, ...], host: int | None) -> bytes:
         return self._frame({"t": "roster", "host": host, "players": [
             {"id": e.id, "name": e.name, "color": e.color} for e in entries]})
+
+    def encode_rooms(self, rooms: tuple[RoomInfo, ...]) -> bytes:
+        return self._frame({"t": "rooms", "rooms": [
+            {"id": r.id, "name": r.name, "players": r.players, "max": r.max_players,
+             "phase": r.phase, "host": r.host, "open": r.open} for r in rooms]})
+
+    def encode_room(self, room_id: int | None) -> bytes:
+        # null = volvió al vestíbulo.
+        return self._frame({"t": "room", "id": room_id})
 
     def encode_error(self, code: str) -> bytes:
         return self._frame({"t": "error", "code": code})

@@ -303,8 +303,8 @@ def test_arena_contiene_por_el_centro():
 
 def test_puntos_de_aparicion_dentro_y_separados():
     arena = Arena(CFG.ARENA_RADIUS)
-    points = arena.spawn_points(CFG.MAX_ACTIVE_PLAYERS, CFG.SPAWN_RING_FRACTION)
-    assert len(points) == CFG.MAX_ACTIVE_PLAYERS
+    points = arena.spawn_points(CFG.MAX_ROOM_PLAYERS, CFG.SPAWN_RING_FRACTION)
+    assert len(points) == CFG.MAX_ROOM_PLAYERS
     for p, q in itertools.combinations(points, 2):
         assert (p - q).length() > 2 * CFG.DISC_RADIUS
     assert all(p.length() + CFG.DISC_RADIUS < CFG.ARENA_RADIUS for p in points)

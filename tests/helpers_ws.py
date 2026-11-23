@@ -63,11 +63,19 @@ class WsClient:
         assert opcode == 0x1, (opcode, payload)
         return json.loads(payload)
 
-    async def recv_state(self) -> dict:
-        """Siguiente `state`, saltando welcome y roster (que llegan antes)."""
-        while (msg := await self.recv_json())["t"] != "state":
+    async def recv_type(self, kind: str) -> dict:
+        """Siguiente mensaje de ese tipo, saltando los demás (welcome, rooms, roster...)."""
+        while (msg := await self.recv_json())["t"] != kind:
             pass
         return msg
+
+    async def recv_state(self) -> dict:
+        """Siguiente `state`, saltando welcome, rooms, room y roster (que llegan antes)."""
+        return await self.recv_type("state")
+
+    async def hello(self, name: str) -> dict:
+        self.send_json({"t": "hello", "name": name})
+        return await self.recv_type("welcome")
 
     async def close(self) -> None:
         self.writer.close()
@@ -75,6 +83,24 @@ class WsClient:
             await self.writer.wait_closed()
         except ConnectionError:
             pass
+
+
+async def make_room(port: int, players: int, names: tuple[str, ...] = ()) -> list["WsClient"]:
+    """Un anfitrión que crea una sala y `players - 1` que se unen; el primero devuelto
+    es el anfitrión. Cuando regresa, todos ya están en la sala."""
+    clients: list[WsClient] = []
+    host = await WsClient.connect(port)
+    await host.hello(names[0] if names else "host")
+    host.send_json({"t": "create"})
+    room_id = (await host.recv_type("room"))["id"]
+    clients.append(host)
+    for i in range(1, players):
+        guest = await WsClient.connect(port)
+        await guest.hello(names[i] if len(names) > i else f"j{i}")
+        guest.send_json({"t": "join", "room": room_id})
+        assert (await guest.recv_type("room"))["id"] == room_id
+        clients.append(guest)
+    return clients
 
 
 @asynccontextmanager

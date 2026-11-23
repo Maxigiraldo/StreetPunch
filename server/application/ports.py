@@ -7,6 +7,8 @@ adaptadores las implementan, y las pruebas usan implementaciones falsas.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from server.domain.hall import RoomInfo
+
 
 @dataclass(frozen=True)
 class DiscView:
@@ -32,10 +34,9 @@ class Snapshot:
 class WelcomeInfo:
     id: int
     color: str
-    role: str
     arena_radius: float
     disc_radius: float
-    max_players: int           # jugadores por ronda: el cliente calcula en qué turno le toca
+    max_players: int           # tope de jugadores por sala
     dash_cooldown_s: float     # para mostrar el enfriamiento de la embestida
     min_charge: float          # fracción de carga (0 a 1) bajo la cual soltar no embiste ni enfría
     min_players: int           # jugadores que hacen falta para que el anfitrión pueda iniciar
@@ -65,6 +66,12 @@ class SnapshotObserver(ABC):
     @abstractmethod
     def on_roster(self, data: bytes) -> None: ...
 
+    @abstractmethod
+    def on_rooms(self, data: bytes) -> None: ...
+
+    @abstractmethod
+    def on_notice(self, data: bytes) -> None: ...
+
 
 class SnapshotEncoder(ABC):
     """Convierte la foto a bytes listos para el cable. GameSession no sabe si
@@ -78,3 +85,12 @@ class SnapshotEncoder(ABC):
 
     @abstractmethod
     def encode_roster(self, entries: tuple[RosterEntry, ...], host: int | None) -> bytes: ...
+
+    @abstractmethod
+    def encode_rooms(self, rooms: tuple[RoomInfo, ...]) -> bytes: ...
+
+    @abstractmethod
+    def encode_room(self, room_id: int | None) -> bytes: ...
+
+    @abstractmethod
+    def encode_error(self, code: str) -> bytes: ...
