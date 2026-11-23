@@ -2,7 +2,7 @@
 
 Uso (con el servidor corriendo; mira `tools/monitor.py` a la vez):
     .venv/bin/python tools/slow_client.py [--mode stall|trickle] [--count 1] [--seconds 60]
-                                          [--rcvbuf 1024] [--port 8080]
+                                          [--rcvbuf 1024] [--port 8080] [--keepalive]
 
 Qué demuestra (RNF-06, backpressure): un cliente que no lee NO debe frenar al
 servidor ni a los demás.
@@ -25,10 +25,11 @@ import socket
 import time
 
 from procinfo import fetch_metrics
-from wslite import HandshakeFailed, WsConn, connect
+from wslite import OP_PING, HandshakeFailed, WsConn, connect
 
 TRICKLE_BYTES = 256          # cuánto lee por segundo en modo trickle
 CHECK_EVERY_S = 1.0
+KEEPALIVE_EVERY_S = 5.0      # con --keepalive: un ping vacío cada tanto (no lee nada)
 WATCHED = ("mailbox_overwrites", "write_timeouts", "idle_timeouts", "bytes_sent")
 
 
@@ -47,6 +48,7 @@ async def lazy_client(index: int, args: argparse.Namespace, fates: list[str]) ->
     probe = socket.socket(fileno=os.dup(transport.get_extra_info("socket").fileno()))
     transport.pause_reading()                       # a partir de aquí el kernel acumula sin que lo leamos
     cut_at = None
+    next_keepalive = started
     while time.monotonic() - started < args.seconds:
         await asyncio.sleep(CHECK_EVERY_S)
         if args.mode == "trickle":
@@ -56,6 +58,12 @@ async def lazy_client(index: int, args: argparse.Namespace, fates: list[str]) ->
             except asyncio.TimeoutError:
                 pass
             transport.pause_reading()
+        if args.keepalive and time.monotonic() >= next_keepalive:
+            # Enviar renueva el plazo de inactividad del servidor SIN leer nada: es
+            # el zombi "vivo" que hace falta para probar la versión mala de P8
+            # (sin esto el servidor bueno lo expulsa a los 30 s por inactividad).
+            next_keepalive = time.monotonic() + KEEPALIVE_EVERY_S
+            await conn.send(OP_PING, b"")
         if peer_cut(probe):
             cut_at = time.monotonic() - started
             break
@@ -84,6 +92,8 @@ async def main() -> None:
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--rcvbuf", type=int, default=1024, help="SO_RCVBUF en bytes (pequeño = se llena antes)")
+    parser.add_argument("--keepalive", action="store_true",
+                        help="manda un ping vacío cada 5 s para que el servidor no lo expulse por inactividad")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
 
