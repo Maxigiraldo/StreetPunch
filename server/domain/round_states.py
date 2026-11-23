@@ -64,7 +64,7 @@ class _TimedState(RoundState):
 
 class Waiting(RoundState):
     """Sala de espera. La ronda NO arranca sola: la inicia el anfitrión (el
-    primero en llegar) cuando ve en la lista que ya están todos, y solo si
+    más antiguo de la sala) cuando ve en la lista que ya están todos, y solo si
     hay MIN_PLAYERS_TO_START. Antes arrancaba al reunir el mínimo y quien
     llegaba segundo jugaba solo contra el primero mientras el resto esperaba;
     cualquier regla automática de "cuántos esperar" repetía ese problema."""

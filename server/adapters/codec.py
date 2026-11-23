@@ -6,7 +6,7 @@ registro (OCP).
 
 Hay dos registros, según la etapa de la conexión:
 - antes de `hello`: solo se acepta `hello`;
-- después: `input` y `charge` (y un segundo `hello` es un error).
+- después: `input`, `charge`, `start`, `create`, `join`, `leave` (y un segundo `hello` es un error).
 La ClientSession cambia de codec al entrar; no necesita un `if ya_entré`.
 
 Toda la validación de lo que manda el cliente vive aquí (no confiar en el

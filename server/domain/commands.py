@@ -3,7 +3,7 @@
 Un comando separa CUÁNDO llega una entrada (en la tarea `reader` de un
 cliente, en cualquier momento) de CUÁNDO se aplica (dentro del tick). Es la
 base de la regla del único escritor: el reader solo crea el comando y lo deja
-en la cola; únicamente el tick llama a execute().
+en la cola acotada; únicamente el tick lo ejecuta.
 
 Todos cumplen el mismo contrato (LSP): execute(world) no devuelve nada y no
 lanza excepciones aunque el jugador ya no exista (pudo irse en este mismo tick).
@@ -60,7 +60,9 @@ class JoinCommand(Command):
     name: str
 
     def execute(self, world: World) -> None:
-        # Entra a la cola; jugará cuando empiece una ronda (nunca a mitad).
+        # Registra al jugador en ESTE mundo (una sala). Solo se usa en pruebas del
+        # dominio: en el servidor, conectarse pasa por Hall.connect y unirse a una
+        # sala por JoinRoomCommand.
         world.add_player(self.player_id, self.name)
 
 

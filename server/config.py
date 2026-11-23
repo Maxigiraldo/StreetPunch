@@ -43,7 +43,7 @@ class Config:
     # tardaría más de 10 minutos en llenarlo y recién entonces actuaría nuestro
     # backpressure (buzón de 1 + WRITE_TIMEOUT_S); con 100 clientes serían hasta
     # ~260 MB de memoria del kernel retenidos por conexiones zombi. Con 64 KB
-    # (Linux lo duplica) caben ~3 s de estado de un jugador (~20 KB/s con 12
+    # (Linux lo duplica) caben ~3 s de estado de un jugador (~20 KB/s con 8-12
     # discos), de sobra para absorber un tropiezo de la red, y un cliente
     # que no lee se detecta en decenas de segundos y no en minutos. Si el
     # juego envía más datos por segundo, subirlo.
@@ -194,8 +194,8 @@ class Config:
     # Radio de la arena circular. Con un canvas de ~700 px deja margen.
     ARENA_RADIUS: float = 300.0
 
-    # Radio de cada disco. 12 discos ocupan ~8 % del área de la arena:
-    # hay espacio para moverse.
+    # Radio de cada disco. 8 discos (el tope de una sala) ocupan ~5 % del área de
+    # la arena: hay espacio para moverse.
     DISC_RADIUS: float = 24.0
 
     # Margen de caída: un disco solo se elimina cuando su CENTRO pasa del borde
@@ -249,12 +249,14 @@ class Config:
 
     # Los discos aparecen repartidos en un círculo al 60 % del radio de la
     # arena: lejos del borde (nadie cae al empezar) y lejos del centro (no
-    # nacen encimados). Con 12 discos quedan separados ~94 px entre centros,
-    # casi el doble del diámetro.
+    # nacen encimados). Con 8 discos quedan separados ~140 px entre centros
+    # (2 x 0,6 x 300 x sen(22,5°)), casi el triple del diámetro.
     SPAWN_RING_FRACTION: float = 0.6
 
-    # Colores de los discos: 12, uno por jugador activo. Elegidos para
-    # distinguirse sobre fondo oscuro. Si hay más jugadores, se repiten.
+    # Colores de los discos: 12, elegidos para distinguirse sobre fondo oscuro. El
+    # color sale de `id % 12` (ver world.color_for): es el mismo en el vestíbulo y
+    # en cualquier sala, pero dos jugadores cuyos ids difieran en múltiplo de 12
+    # comparten color (límite conocido; el nombre sobre el disco los distingue).
     PLAYER_COLORS: tuple[str, ...] = (
         "#e4572e", "#29b6f6", "#ffc914", "#76b041", "#c060a1", "#17bebb",
         "#ff8c42", "#8e7dbe", "#f25f5c", "#2ec4b6", "#d4e157", "#f7a1c4",

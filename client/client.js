@@ -93,7 +93,7 @@ const session = {
   room: null,          // id de la sala en que estoy; null = en el vestíbulo
   rooms: [],           // lista de salas (solo llega mientras estoy en el vestíbulo)
   cooldownS: 0,        // enfriamiento de la embestida (del welcome)
-  host: null,          // id del anfitrión de la sala (el primero en llegar)
+  host: null,          // id del anfitrión de la sala (el más antiguo en ella)
   roster: new Map(),   // id -> { name, color }, tal como lo manda el servidor
 };
 
@@ -489,7 +489,7 @@ function describe(state) {
 // Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño].
 // Registro por fase (como `handlers`): una fase nueva es una entrada nueva.
 const overlayFor = {
-  // Sala de espera: la ronda no arranca sola, la inicia el anfitrión (el primero en llegar)
+  // Sala de espera: la ronda no arranca sola, la inicia el anfitrión (el más antiguo de la sala)
   // cuando ve en la lista que ya están todos.
   waiting: () => {
     const count = session.roster.size;
@@ -510,8 +510,6 @@ const overlayFor = {
   },
 };
 
-// Filas del marcador: todos los del roster, con sus victorias y su estado en esta ronda.
-// Más victorias primero; a igualdad, el orden del roster (el de llegada).
 function isHost() {
   return session.me !== null && session.me === session.host;
 }
@@ -522,6 +520,8 @@ function syncStartButton(state) {
   els.start.hidden = !(isHost() && state.phase === "waiting");
 }
 
+// Filas del marcador: todos los del roster, con sus victorias y su estado en esta ronda.
+// Más victorias primero; a igualdad, el orden del roster (el de llegada).
 function scoreRows(state) {
   const inRound = new Map(state.d.map((disc) => [disc[0], disc[4]]));
   const rows = [...session.roster].map(([id, info]) => ({

@@ -95,8 +95,8 @@ class Physics:
         return self._cfg.DISC_MASS * factor
 
     def resolve_collisions(self, discs: list[Disc]) -> None:
-        """Choque elástico entre cada par que se solapa: O(n²), con 12 discos
-        son 66 pares por tick, despreciable frente a los 33 ms del tick."""
+        """Choque elástico entre cada par que se solapa: O(n²), con 8 discos (el tope
+        de una sala) son 28 pares por tick y sala, despreciable frente a los 33 ms."""
         for i in range(len(discs)):
             for j in range(i + 1, len(discs)):
                 self._collide(discs[i], discs[j])
