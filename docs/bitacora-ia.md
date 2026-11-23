@@ -232,7 +232,7 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
   > "...yo solo contra bot0, en la segunda yo contra el bot0 hasta el bot11 [...] tampoco se define cuando un espectador entra a jugar"
 - **Qué generó la IA:** la rotación (RF-03) se hacía al empezar cada ronda moviendo al **final de `World.players`** a quienes iban a jugar; la cola era el orden del propio diccionario.
 - **Problema (categoría: concurrencia / estado compartido):** el orden de llegada y el turno eran **el mismo dato**. Quien llegaba *después* de empezar una ronda quedaba detrás de los que ya habían jugado, así que el mismo grupo volvía a ser el primero de la cola (Max jugó las rondas 1 y 2 seguidas; con 50 bots tampoco entraban todos).
-- **Corrección:** separar los dos datos. `players` ya no se reordena nunca; el turno se calcula aparte en `World.queue()` (`server/domain/world.py`), ordenando por (última ronda jugada, orden de llegada):
+- **Corrección:** separar los dos datos. `players` ya no se reordena nunca; el turno se calcula aparte en `World.queue()` (`server/domain/world.py`), ordenando por (última ronda jugada, orden de llegada). Las líneas `-` son un **esquema** de lo que hacía el código viejo, no su texto literal (el literal está en el historial de git, antes del commit `f6b274c`):
   ```diff
   -self.players = {**{p: ... for p in resto}, **{p: ... for p in jugaron}}   # reordenar para rotar
   +def queue(self):
