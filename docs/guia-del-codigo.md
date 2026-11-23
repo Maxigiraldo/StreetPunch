@@ -3,7 +3,7 @@
 Documento para **entender y defender** todo el código. Explica cada archivo, clase,
 método y función, cómo se conectan y dónde está lo importante. Las referencias
 `archivo:línea` las genera un script leyendo el código real (si un nombre no
-existiera, el documento no se construiría); valen para el commit `13553b5`.
+existiera, el documento no se construiría); valen para el commit `8b0ece8`.
 
 ## Cómo leerlo
 
@@ -14,6 +14,7 @@ existiera, el documento no se construiría); valen para el commit `13553b5`.
 | Saber qué hace un método | §3 (servidor, archivo por archivo) y §4 (cliente) |
 | Ubicar cualquier símbolo | Apéndice B (índice con líneas) |
 | Saber qué NO está perfecto | §8 (límites honestos) |
+| **Entender el conocimiento que hay detrás** (redes, concurrencia, WebSocket, patrones) y qué estudiar | **Anexo: [`docs/conceptos-y-estudio.md`](conceptos-y-estudio.md)** |
 
 ## 0. Estado de verificación (corrido al escribir este documento)
 

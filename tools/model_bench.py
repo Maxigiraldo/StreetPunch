@@ -4,8 +4,8 @@ Uso:
     .venv/bin/python tools/model_bench.py [--clients 100,300] [--seconds 8] [--models asyncio,threads,pool,fork,threads-naive]
 
 Qué hace: levanta, uno por uno, un servidor mínimo de cada modelo que difunde
-un estado de 600 bytes a 30 Hz a todos sus clientes (la carga de StreetPunch
-con ~12 discos), conecta N clientes que solo leen, y mide desde /proc:
+un estado de 600 bytes a 30 Hz a todos sus clientes (algo MÁS que un estado real
+de StreetPunch: 330 B con 8 discos y 456 B con 12; se usa 600 como cota prudente), conecta N clientes que solo leen, y mide desde /proc:
   * memoria real (PSS: reparte las páginas compartidas entre procesos; RSS las contaría N veces),
   * hilos/procesos, CPU, y cuántos de los clientes reciben ≥ 90 % de lo esperado.
 Después repite con UN cliente lento que no lee (zombi) para ver si frena a los demás.
@@ -27,7 +27,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 HZ = 30
-PAYLOAD = b"x" * 600           # un estado de ~12 discos
+PAYLOAD = b"x" * 600           # cota prudente: un estado real mide 330 B (8 discos) a 456 B (12)
 POOL_WORKERS = 16              # el ThreadingTCPServer "con tope": cabe por tamaño del pool
 SNDBUF = 65536                 # el mismo límite de envío que usa el servidor real
 

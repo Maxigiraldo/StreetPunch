@@ -7,13 +7,13 @@ Este documento define la carga, mide los cuatro modelos candidatos con ella
 ## 1. La carga elegida
 
 - Hasta **100 conexiones** (`MAX_CONNECTIONS`) repartidas en **salas de hasta 8 jugadores** (`MAX_ROOM_PLAYERS`); todos los de una sala juegan a 30 Hz (en espera, 10 Hz). En el peor caso hay ~13 salas jugando a la vez.
-- Cada cliente recibe un estado de **~400 a 600 bytes** (8 discos) **30 veces por segundo**. Casi todo es **E/S**: la física de 8 discos son 28 pares de colisión por tick y sala.
+- Cada cliente recibe un estado de **~330 bytes** con 8 discos (medido; 456 con 12) **30 veces por segundo**. Casi todo es **E/S**: la física de 8 discos son 28 pares de colisión por tick y sala.
 - **Estado compartido y pequeño, por sala**: cada sala es un mundo que solo ven sus jugadores. La difusión (un dato → 8 clientes) es el patrón dominante, y el trabajo crece con el número de salas, no con N×N global.
 - Conexiones **largas** (una partida entera), no peticiones cortas.
 
 ## 2. Qué se midió y cómo
 
-`tools/model_bench.py` levanta, uno a uno, un servidor mínimo de cada modelo con **TCP crudo** (sin WebSocket ni física, para comparar solo el modelo) que difunde 600 B a 30 Hz a N clientes. Los clientes corren en procesos aparte (hasta 8, para que el generador de carga no sea el cuello de botella; una primera versión con un solo proceso daba cifras falsas contra `asyncio` a 1000 clientes y se descartó). Se mide desde `/proc`: memoria **PSS** (reparte las páginas compartidas entre procesos; RSS las contaría N veces), hilos, procesos y CPU. Después se repite con **un cliente zombi** que conecta y no lee.
+`tools/model_bench.py` levanta, uno a uno, un servidor mínimo de cada modelo con **TCP crudo** (sin WebSocket ni física, para comparar solo el modelo) que difunde 600 B a 30 Hz a N clientes (cota prudente: un estado real de StreetPunch mide 330 B con 8 discos y 456 B con 12, así que la prueba es algo más exigente que el juego). Los clientes corren en procesos aparte (hasta 8, para que el generador de carga no sea el cuello de botella; una primera versión con un solo proceso daba cifras falsas contra `asyncio` a 1000 clientes y se descartó). Se mide desde `/proc`: memoria **PSS** (reparte las páginas compartidas entre procesos; RSS las contaría N veces), hilos, procesos y CPU. Después se repite con **un cliente zombi** que conecta y no lee.
 
 "Sanos" = reciben al menos el 90 % de lo esperado (27 Hz). Equipo: WSL2, 20 núcleos, loopback.
 

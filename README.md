@@ -55,6 +55,7 @@ cada cliente).
 | --- | --- |
 | [`docs/diseno.md`](docs/diseno.md) | Diseño (fuente de verdad), requisitos y plan |
 | [`docs/guia-del-codigo.md`](docs/guia-del-codigo.md) | **Recorrido de todo el código**: flujos de ejecución, cada clase y método, dónde está lo importante, límites honestos |
+| [`docs/conceptos-y-estudio.md`](docs/conceptos-y-estudio.md) | **Anexo de estudio**: los conceptos que hay que dominar (redes, WebSocket, asyncio, patrones...), qué buscar, experimentos, autoevaluación |
 | [`docs/arquitectura.md`](docs/arquitectura.md) | Estilo, diagrama de clases UML, patrones GoF y SOLID, qué tarea toca qué |
 | [`docs/modelo-concurrencia.md`](docs/modelo-concurrencia.md) | Por qué asyncio, con números medidos |
 | [`docs/protocolo.md`](docs/protocolo.md) | Mensajes, cierres, `/metrics`, plazos |
