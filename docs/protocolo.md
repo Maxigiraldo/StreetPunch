@@ -49,13 +49,20 @@ cliente                                servidor
   | <-- 101 Switching Protocols ----------- |
   | --- {"t":"hello","name":"Ana"} -------> |  plazo del hello: 5 s más; JoinCommand -> cola de membresía
   | <-- {"t":"welcome",...} --------------- |  lo genera el tick (único escritor)
-  | <-- {"t":"roster",...} ---------------- |  quién es quién; se repite cuando alguien entra o sale
-  | <-- {"t":"state",...} x 30 Hz -------- |  10 Hz si es espectador
+  | <-- {"t":"rooms",...} ----------------- |  VESTÍBULO: lista de salas (cuando cambia)
+  | --- {"t":"create"} / {"t":"join",...} -> |  crear una sala o unirse a una abierta
+  | <-- {"t":"room","id":3} --------------- |  ya estás en la sala 3
+  | <-- {"t":"roster",...} ---------------- |  quién es quién en TU sala; se repite cuando cambia
+  | <-- {"t":"state",...} ----------------- |  30 Hz jugando; 10 Hz en espera, cuenta atrás y resultados
+  | --- {"t":"start"} (anfitrión) --------> |  inicia la ronda desde la sala de espera
   | --- {"t":"input",...} / charge ------> |
-  | --- close ----------------------------> |  LeaveCommand; se libera el cupo
+  | --- {"t":"leave"} --------------------> |  vuelve al vestíbulo: <-- room(null) <-- rooms
+  | --- close ----------------------------> |  Disconnect: sale de su sala y se libera el cupo
 ```
 
 `hello` debe ser el **primer** mensaje. Cualquier otro antes de él se responde con `error` y se cierra con 1008.
+
+**Vestíbulo y salas.** Tras el `hello` el cliente está en el **vestíbulo** (sin sala) y solo recibe `welcome` y `rooms`. Está en **como máximo una sala**: crea una (`create`, y es su anfitrión) o se une a una abierta (`join`). Una sala está **abierta** si tiene menos de `max_players` jugadores y está en `waiting`; con la sala llena o ya jugando no se puede entrar (se recibe un `error` suave, sin cierre). **Todos los de la sala juegan cada ronda**: no hay cola ni espectadores. Una sala vacía desaparece.
 
 ## 3. Mensajes cliente → servidor
 
@@ -64,10 +71,14 @@ cliente                                servidor
 | `hello` | `name`: string | `{"t":"hello","name":"Ana"}` | Solo una vez. Tras quitar espacios, entre 1 y `MAX_NAME_LEN` (16) caracteres. Si no, `bad_name` |
 | `input` | `dx`, `dy`: entero en {-1, 0, 1} (no booleano) | `{"t":"input","dx":1,"dy":-1}` | Fuera de rango → `bad_message` |
 | `charge` | `on`: booleano | `{"t":"charge","on":true}` | `true` empieza a cargar y `false` suelta la embestida. Si no es booleano → `bad_message`. Una carga menor que `min_charge` no embiste ni gasta enfriamiento |
-| `start` | (ninguno) | `{"t":"start"}` | Pide iniciar la ronda desde la sala de espera. **Solo cuenta si viene del anfitrión** (el conectado más antiguo) y solo en `waiting`; de cualquier otro, o en otra fase, se ignora sin error. Sin `MIN_PLAYERS_TO_START` jugadores tampoco hace nada, y la orden no queda guardada |
+| `start` | (ninguno) | `{"t":"start"}` | Pide iniciar la ronda desde la sala de espera. **Solo cuenta si viene del anfitrión de la sala** (el más antiguo en ella) y solo en `waiting`; de cualquier otro, o en otra fase, se ignora sin error. Sin `MIN_PLAYERS_TO_START` jugadores tampoco hace nada, y la orden no queda guardada |
+| `create` | (ninguno) | `{"t":"create"}` | Crea una sala y entra en ella como anfitrión. Rechazos: `already_in_room`, `too_many_rooms` (`MAX_ROOMS`) |
+| `join` | `room`: entero (no booleano) | `{"t":"join","room":3}` | Entra a esa sala. Rechazos: `no_room`, `room_full`, `room_busy` (está jugando), `already_in_room`. `room` que no es entero → `bad_message` |
+| `leave` | (ninguno) | `{"t":"leave"}` | Sale de su sala y vuelve al vestíbulo. Fuera de una sala: `not_in_room` |
 
 - Los campos desconocidos se **ignoran**. Si un cliente manda `x`/`y`, el servidor ni los lee.
-- Solo se aplican `MAX_INPUTS_PER_CLIENT_PER_TICK` (4) entradas por cliente por tick. Las demás se descartan en silencio y se cuentan en las métricas, sin error ni cierre.
+- `input`, `charge`, `start` y los mensajes de sala se ignoran si el cliente no está en una sala (`input`, `charge`, `start`) o dan su rechazo (los de sala).
+- Solo se aplican `MAX_INPUTS_PER_CLIENT_PER_TICK` (4) órdenes por cliente por tick, **incluidas** las de sala: un cliente que inunde con crear/salir queda limitado igual que uno que inunde con movimientos. Las demás se descartan en silencio y se cuentan en las métricas, sin error ni cierre.
 - Si la cola de entradas compartida está llena, la entrada también se descarta y se cuenta.
 
 ## 4. Mensajes servidor → cliente
@@ -75,39 +86,56 @@ cliente                                servidor
 ### `welcome` (una sola vez, dirigido a un cliente)
 
 ```json
-{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{"radius":300.0,"disc_radius":24.0},"max_players":12,"dash_cooldown_s":1.5,"min_charge":0.2,"min_players":2}
+{"t":"welcome","id":7,"color":"#e4572e","arena":{"radius":300.0,"disc_radius":24.0},"max_players":8,"dash_cooldown_s":1.5,"min_charge":0.2,"min_players":2}
 ```
 
 | Campo | Significado |
 | --- | --- |
 | `id` | Identificador del cliente durante la sesión |
 | `color` | Color asignado a su disco |
-| `role` | `"player"` o `"spectator"` en el momento de entrar. Como nadie entra a mitad de ronda, al llegar siempre es `"spectator"`; el rol real se deduce de si el `id` aparece en `d` |
 | `arena` | Geometría para dibujar |
-| `max_players` | Jugadores por ronda. Con el orden del `roster` el cliente calcula en qué turno entra un espectador |
+| `max_players` | Tope de jugadores por sala (`MAX_ROOM_PLAYERS`) |
 | `dash_cooldown_s` | Segundos de enfriamiento tras una embestida; el cliente dibuja el anillo de recarga |
 | `min_charge` | Fracción de carga (0 a 1) por debajo de la cual soltar no embiste ni inicia el enfriamiento |
 | `min_players` | Jugadores que hacen falta para que el anfitrión pueda iniciar |
 
-Llega siempre **antes** del primer `state`. El tick genera el `welcome` en el mismo tick en que ejecuta el `JoinCommand`, y el `writer` lo envía antes que el contenido del buzón.
+Llega siempre **antes** que cualquier otro mensaje. El tick genera el `welcome` en el mismo tick en que ejecuta el `Connect`, y el `writer` lo envía antes que el contenido de las demás casillas.
 
-### `roster` (a todos, cuando alguien entra o sale)
+### `rooms` (al vestíbulo, cuando cambia la lista)
+
+```json
+{"t":"rooms","rooms":[{"id":1,"name":"Sala 1","players":3,"max":8,"phase":"waiting","host":"Ana","open":true},
+                       {"id":2,"name":"Sala 2","players":8,"max":8,"phase":"playing","host":"Luis","open":false}]}
+```
+
+Lista **completa**, ordenada por `id`, que reciben solo quienes están en el vestíbulo: una vez al llegar (o al volver) y luego cada vez que cambia algo (alguien entra, sale, cambia de fase). `open` es `players < max` y `phase == "waiting"`: lo que el cliente usa para activar el botón «Unirse». Una lista vacía (`"rooms":[]`) es normal.
+
+### `room` (a un cliente, cuando cambia su sala)
+
+```json
+{"t":"room","id":3}      {"t":"room","id":null}
+```
+
+`id` es la sala en que acaba de entrar, o `null` si volvió al vestíbulo. Lo genera el tick comparando la sala real con la última avisada, así que no hace falta que cada comando se acuerde de avisar. Al recibirlo, el cliente borra lo de la sala anterior (estado, jugadores, controles).
+
+Orden garantizado al entrar a una sala: `room`, `roster`, `state`.
+
+### `roster` (a los de una sala, cuando cambia)
 
 ```json
 {"t":"roster","host":7,"players":[{"id":7,"name":"Ana","color":"#e4572e"},{"id":9,"name":"Luis","color":"#17bebb"}]}
 ```
 
-`host` es el id del **anfitrión de la sala**: el conectado más antiguo. No se guarda, se deduce: si se va, lo es el siguiente más antiguo y el roster se reenvía. Es quien puede mandar `start`.
+`host` es el id del **anfitrión de la sala**: el más antiguo en ella. No se guarda, se deduce: si se va, lo es el siguiente más antiguo y el roster se reenvía. Es quien puede mandar `start`.
 
-Lista **completa**, **en orden de cola**, de todos los conectados que ya hicieron `hello` (jugadores y espectadores). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
+Lista **completa**, **en orden de llegada a la sala**, de los jugadores de **esa** sala (el de otra sala nunca llega). El `state` solo trae ids; con el roster el cliente pone nombre y color a cada disco y al marcador, y todas las pestañas ven el mismo color para el mismo jugador.
 
-- Lo genera el tick (único escritor) en el mismo tick en que ejecuta el `Connect` o el `Disconnect`, y lo recibe **todo** observador, también los espectadores (que reciben `state` a 10 Hz).
-- Orden garantizado para un cliente nuevo: `welcome`, `roster`, `state`.
-- El orden ES la cola: cada ronda toma a los primeros `max_players` y los manda al final. Por eso también se reenvía cuando solo cambia el orden (al empezar una ronda). Un espectador cuenta cuántos hay delante de él entre los que **no** están en `d`.
+- Lo genera el tick (único escritor) en el mismo tick en que alguien entra a la sala o sale de ella (o se desconecta), y lo reciben todos los de esa sala.
+- Se reenvía cuando cambia la lista o el anfitrión.
 - Siempre va completo, así que uno nuevo reemplaza al anterior: si el buzón de un cliente lento pisa un roster, no se pierde información.
 - Un id que aparece en `state` y no en el `roster` (carrera de un tick) se dibuja sin nombre hasta que llegue el siguiente roster.
 
-### `state` (cada tick, el mismo para todos)
+### `state` (el mismo para todos los de una sala)
 
 ```json
 {"t":"state","tick":1234,"phase":"playing","ms":null,"winner":null,
@@ -121,13 +149,13 @@ Lista **completa**, **en orden de cola**, de todos los conectados que ya hiciero
 | `ms` | Milisegundos que le quedan a la fase actual; `null` si la fase no tiene plazo (`waiting` y `playing`). La sala de espera no tiene plazo: no arranca sola, la inicia el anfitrión con `start` |
 | `winner` | Id del ganador durante `round_over`; `null` en las demás fases o si nadie ganó |
 | `scores` | Rondas ganadas por id (las claves son strings porque JSON solo admite claves string) |
-| `d` | Discos de la ronda: `[id, x, y, carga 0..1, vivo 1/0]`. Un disco eliminado queda con `vivo = 0` hasta el fin de la ronda |
+| `d` | Discos de la ronda: `[id, x, y, carga 0..1, vivo 1/0]`. Un disco eliminado queda con `vivo = 0` hasta el fin de la ronda. Vacío fuera de ronda |
 
 **Cada `state` se basta a sí mismo.** No existen mensajes separados de cambio de fase ni de fin de ronda. El cliente compara `phase` con la del estado anterior para detectar los cambios. Por eso el servidor puede descartar estados sin miedo: el buzón de tamaño 1 reemplaza el viejo, y el siguiente trae toda la información.
 
-**Rol actual:** el cliente juega si su `id` aparece en `d`. Si no aparece, es espectador (está en cola o la ronda empezó sin él).
+**Frecuencia:** 30 Hz mientras la sala está en `playing` y `QUIET_PHASE_HZ` (10 Hz) en `waiting`, `countdown` y `round_over`, donde nada se mueve (política de envío por fase, `server/application/send_policies.py`). Solo lo reciben quienes están en esa sala; el vestíbulo no recibe `state`.
 
-### `error` (antes de un cierre por regla)
+### `error` (un cierre por regla, o un rechazo de sala sin cierre)
 
 ```json
 {"t":"error","code":"bad_name"}
@@ -137,6 +165,7 @@ Lista **completa**, **en orden de cola**, de todos los conectados que ya hiciero
 | --- | --- | --- |
 | `bad_name` | Nombre vacío, demasiado largo o que no es string | 1008 |
 | `bad_message` | JSON inválido, `t` desconocido o campos fuera de rango | 1008 |
+| `room_full`, `room_busy`, `no_room`, `too_many_rooms`, `already_in_room`, `not_in_room` | Rechazos de sala (**suaves**): el cliente sigue conectado y puede intentar otra cosa. Llegan por la misma casilla de avisos que `room`, así que si llegan dos seguidos gana el último | **ninguno** |
 | `not_hello` | Primer mensaje distinto de `hello`, o un segundo `hello` | 1008 |
 | `full` | Se alcanzó `MAX_CONNECTIONS`. El servidor contesta el saludo con normalidad (101) y entonces manda este error. Las páginas HTTP se siguen sirviendo | 1013 |
 | `timeout` | No llegó el `hello` en `HANDSHAKE_TIMEOUT_S` (5 s, plazo total), o no hubo ningún tráfico (ni el `pong` a nuestro ping) en `IDLE_TIMEOUT_S` (30 s) | 1008 |

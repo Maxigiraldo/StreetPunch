@@ -45,15 +45,15 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 | --- | --- | --- |
 | RF-01 | El servidor entrega la página en `GET /` y acepta WebSocket en `/ws` | N |
 | RF-02 | El cliente envía su nombre (máx. 16 caracteres) y recibe id y color | N |
-| RF-03 | Una arena, hasta 12 jugadores activos; los demás son espectadores en cola (cada ronda toma a los de la cola que más rondas llevan sin jugar). Cada ronda toma a los 12 primeros de la cola y los manda al final (rotación); el cliente muestra el turno de cada espectador | N |
+| RF-03 | **Salas.** Cualquiera crea una sala y es su anfitrión; hasta `MAX_ROOM_PLAYERS` (8) jugadores por sala y hasta `MAX_ROOMS` salas. Se entra a una sala solo si tiene sitio y está en espera; con la sala llena o jugando no se puede entrar. **Todos los de la sala juegan cada ronda: no hay cola, turnos ni espectadores.** Una sala vacía desaparece. (Cambio de diseño decidido por Max el 2026-11-22: la arena única con cola de turnos se sentía injusta —el anfitrión jugaba casi siempre y mucha gente quedaba esperando— y su regla de rotación falló dos veces; ver bitácora, entradas 10 y 13.) | N |
 | RF-04 | Si un jugador se desconecta su disco desaparece; si queda uno solo, la ronda termina | N |
-| RF-05 | Fases: sala de espera (la ronda no arranca sola: la inicia el anfitrión, el conectado más antiguo, con `start`, y solo si hay mín. 2; todos ven en el marcador quién está en la sala; tras cada ronda se vuelve a la sala), cuenta regresiva (3 s), jugando, fin, resultados (3 s) | N |
+| RF-05 | Fases de cada sala: sala de espera (la ronda no arranca sola: la inicia el anfitrión con `start`, y solo si hay mín. 2; tras cada ronda se vuelve a la sala), cuenta regresiva (3 s), jugando, fin, resultados (3 s) | N |
 | RF-06 | Marcador de rondas ganadas en memoria durante la sesión | N |
 | RF-07 | Movimiento con aceleración, fricción y velocidad máxima; la fricción es menor por encima de esa velocidad (embestida y golpes) | N |
 | RF-08 | Embestida: se carga hasta 1 s y al soltar da un impulso proporcional; enfriamiento de 1,5 s. Mientras se carga el disco no se mueve y las flechas solo apuntan la embestida | N |
 | RF-09 | Colisiones elásticas; un disco en embestida empuja más | N |
-| RF-10 | Salir del borde elimina; pasa a espectador hasta el fin de la ronda. Se elimina cuando el centro pasa del borde + `ELIMINATION_MARGIN_DISCS` radios (1.0: disco entero fuera) | N |
-| RF-11 | Estado a 30 Hz para jugadores y 10 Hz para espectadores | N |
+| RF-10 | Salir del borde elimina; el disco queda apagado hasta el fin de la ronda. Se elimina cuando el centro pasa del borde + `ELIMINATION_MARGIN_DISCS` radios (1.0: disco entero fuera) | N |
+| RF-11 | Estado a 30 Hz mientras la sala juega y 10 Hz en espera, cuenta atrás y resultados (política de envío por fase) | N |
 | RF-12 | Cliente con `canvas`, interpolación, nombres, carga, fase y marcador | N |
 | RF-13 | Bots sin interfaz, `N` configurable | N |
 | RF-14 | Cliente lento a propósito: conecta y no lee | N |
@@ -65,7 +65,7 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 
 | ID | Requisito | Rúbrica | Cómo se verifica |
 | --- | --- | --- | --- |
-| RNF-01 | Tick estable a 30 Hz con 12 jugadores y 50 espectadores; p99 < 5 ms | C1 | Métricas en la prueba de carga |
+| RNF-01 | Tick estable a 30 Hz con 100 jugadores en 13 salas jugando a la vez; p99 < 5 ms | C1 | Métricas en la prueba de carga |
 | RNF-02 | Sin head-of-line blocking: un cliente lento no altera el tick ni a los demás | C1 | Métricas con y sin cliente lento |
 | RNF-03 | Socket manual: `SO_REUSEADDR`, `listen(128)`, no bloqueante, entregado a `asyncio` | C2 | Reinicio inmediato; revisión del código |
 | RNF-04 | Framing RFC 6455: longitudes 7/16/64 bits, máscara obligatoria, ping/pong, close; tramas parciales se acumulan | C2 | `pytest` con tramas partidas |
@@ -103,9 +103,9 @@ Todos van en `config.py`: cambiar uno no toca código, y cada cambio necesita su
 | --- | --- | --- |
 | Tick 30 Hz | Fluido con interpolación; 33 ms por tick | A 20 Hz si falta ancho de banda (−1/3 de tráfico, ~100 ms de retraso visual) |
 | Espectadores 10 Hz | Solo miran; ahorra 2/3 de su tráfico | A 30 Hz para tener una regla menos |
-| Jugadores activos 12 | Máximo de StreetSmash; cabe en pantalla | A 8 si falta espacio o ancho de banda (crece como N × N) |
+| Jugadores por sala 8 | 8 discos caben holgados en la arena de 300 px y el tráfico de cada sala crece como N × N; con salas no hay a quién dejar fuera | Subir a 12 si hace falta (la arena ya se probó con 12) |
 | Mínimo para iniciar 2 | Con uno no hay partida | No se cambia |
-| Conexiones máx. 100 | 12 + ~50 espectadores + margen; el tope es nuestro, no del SO (1024) | Solo con mediciones de subida o RAM |
+| Conexiones máx. 100 | ~13 salas de 8 + margen; el tope es nuestro, no del SO (1024) | Solo con mediciones de subida o RAM |
 | Backlog `listen` 128 | Aguanta 100 bots a la vez; el kernel solo lo recortaría si superara `somaxconn` (4096 en este equipo, medido en P0) | A 512 si la carga muestra rechazos al arrancar |
 | Buzón de salida 1 | Solo importa el último estado | A 2 si hay tirones por la red (+33 ms cada uno) |
 | Cola de entradas 1024 | Acotada: la memoria no crece sin límite | Subir si se descartan entradas legítimas |
@@ -151,13 +151,13 @@ La prueba para cada uno: ¿hay un `await` entre leer y modificar? Si no lo hay, 
 | --- | --- | --- |
 | Cola de entradas | N `reader` / el tick | `asyncio.Queue(1024)` con `put_nowait`; llena = descartar y contar |
 | Cola de membresía (`Connect` / `Disconnect`) | N `ClientSession` / el tick | `deque` que **nunca** descarta: perder un `Disconnect` dejaría un jugador fantasma y una sesión sin liberar. Acotada por el semáforo (≤ 2 por conexión) |
-| Estado del juego y registro de jugadores | Solo el tick | Único escritor: entradas y salidas son `JoinCommand` / `LeaveCommand` |
+| Estado del juego, el vestíbulo y las salas | Solo el tick | Único escritor: conectarse y salir son `Connect` / `Disconnect`; crear, unirse y salir de una sala son `CreateRoomCommand` / `JoinRoomCommand` / `LeaveRoomCommand`, por la misma cola acotada que las entradas |
 | Lista de observadores | Solo el tick | Igual: suscribirse y darse de baja solo vía comandos |
 | Socket de cada cliente | Solo su `writer` | `reader` deja pong y close en casillas de control (la `control_queue`, acotada a una casilla por tipo; el RFC permite contestar solo el ping más reciente); nunca dos escritores ni dos `drain` |
 | Buzón de cada cliente | Tick / su `writer` | Región crítica sin `await` + `asyncio.Event`; orden: `wait()`, `clear()`, leer |
 | `welcome` pendiente de cada cliente | Tick (vía `on_welcome`) / su `writer` | Igual que el buzón: casilla escrita sin `await` y el mismo `asyncio.Event` |
-| Política de envío de cada cliente | Solo el tick | `GameSession` la elige en cada tick con un registro `{rol: SendPolicy}`; un espectador que entra a la ronda pasa solo a 30 Hz |
-| Estado publicado | Tick / todos los `writer` | `bytes` inmutables, codificados una sola vez por tick |
+| Política de envío de cada cliente | Solo el tick | `GameSession` la elige en cada tick con un registro `{fase: SendPolicy}`: una sala pasa sola a 30 Hz al empezar a jugar |
+| Estado publicado | Tick / los `writer` de la sala | `bytes` inmutables, codificados una sola vez por tick **y por sala** |
 | Cupos de conexión | `accept_loop` / cierre | `asyncio.Semaphore(100)`, liberado en `finally` |
 | Contadores de métricas y de entradas por tick | Varias tareas | Incremento sin `await` en medio: atómico en un solo hilo |
 
@@ -196,8 +196,10 @@ Tramas de texto WebSocket con JSON; ping, pong y close son tramas de control del
 | Cliente → servidor | `hello` | `{"t":"hello","name":"Max"}` | Primer mensaje; sin él, cierre a los 5 s |
 | Cliente → servidor | `input` | `{"t":"input","dx":1,"dy":-1,"seq":42}` | Dirección deseada; `seq` mide latencia |
 | Cliente → servidor | `charge` | `{"t":"charge","on":true}` | Empieza o suelta la carga |
-| Servidor → cliente | `welcome` | `{"t":"welcome","id":7,"color":"#e4572e","role":"player","arena":{...}}` | Identidad, rol y arena |
-| Servidor → cliente | `state` | `{"t":"state","tick":1234,"phase":"playing","ms":null,"winner":null,"scores":{"7":3},"d":[[7,312.5,140.2,0.6,1]]}` | Estado completo: fase, tiempo restante, ganador, marcador y discos `[id,x,y,carga,vivo]` |
+| Cliente → servidor | `create` / `join` / `leave` / `start` | `{"t":"join","room":3}` | Salas: crear, unirse (si hay sitio y está en espera), salir; el anfitrión inicia la ronda (la referencia completa está en `docs/protocolo.md`) |
+| Servidor → cliente | `welcome` | `{"t":"welcome","id":7,"color":"#e4572e","arena":{...},"max_players":8}` | Identidad y arena |
+| Servidor → cliente | `rooms` / `room` / `roster` | `{"t":"rooms","rooms":[{"id":1,"players":3,"max":8,"open":true,...}]}` | Lista de salas (vestíbulo), sala actual y jugadores de la sala |
+| Servidor → cliente | `state` | `{"t":"state","tick":1234,"phase":"playing","ms":null,"winner":null,"scores":{"7":3},"d":[[7,312.5,140.2,0.6,1]]}` | Estado completo de la sala: fase, tiempo restante, ganador, marcador y discos `[id,x,y,carga,vivo]` |
 | Servidor → cliente | `error` | `{"t":"error","code":"bad_name"}` | Antes de un cierre por regla |
 
 **Cada `state` se basta a sí mismo** (decisión del 21/11): no hay mensajes `phase` ni `round_end`. Si el buzón de tamaño 1 descarta un estado, el siguiente trae todo, así que ningún aviso se pierde. El cliente juega si su id aparece en `d`. Detalle completo en `docs/protocolo.md`.
@@ -288,7 +290,7 @@ Son 13 pasos entre el sábado 21 y el martes 24; el miércoles 25 solo se entreg
 
 ### Lunes 23
 
-- [ ] **P5. Cliente web.** `canvas`, interpolación de ~100 ms, teclado, carga, fases, marcador y vista de espectador. Ajustar valores de juego jugando con bots.
+- [ ] **P5. Cliente web.** `canvas`, interpolación de ~100 ms, teclado, carga, fases, marcador y vestíbulo de salas. Ajustar valores de juego jugando con bots.
 - [ ] **P6. Resiliencia.** Timeouts de saludo, inactividad y escritura; SIGTERM/SIGINT con close 1001; `accept` que resiste EMFILE; códigos 1008, 1009 y 1013. Auditar que ningún camino de error deje un socket abierto o un cupo sin liberar.
 - [ ] **P7. Herramientas y carga.** `bots.py`, `slow_client.py`, `churn.py`, `fd_watch.sh` y métricas por segundo. Medir tick p50/p99, ancho de banda, descriptores, `ulimit -n 64` y el efecto del cliente lento.
 - [ ] **P8. Rama `demo/race-bug`.** Difusión con `await drain()` por cliente y borrado directo del diccionario. Confirmar que falla de forma confiable; etiquetarla. Opcional: carrera del tope con 150 conexiones.

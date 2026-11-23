@@ -6,9 +6,9 @@ Este documento define la carga, mide los cuatro modelos candidatos con ella
 
 ## 1. La carga elegida
 
-- Hasta **100 conexiones** (`MAX_CONNECTIONS`), de las cuales **12 juegan** (30 Hz) y el resto mira (10 Hz).
-- Cada cliente recibe un estado de **~600 bytes** (12 discos) **30 veces por segundo**. Casi todo es **E/S**: la física de 12 discos son 66 pares de colisión por tick, ~0,3 ms.
-- **Estado compartido y pequeño**: un solo mundo que todos ven. La difusión (un dato → N clientes) es el patrón dominante.
+- Hasta **100 conexiones** (`MAX_CONNECTIONS`) repartidas en **salas de hasta 8 jugadores** (`MAX_ROOM_PLAYERS`); todos los de una sala juegan a 30 Hz (en espera, 10 Hz). En el peor caso hay ~13 salas jugando a la vez.
+- Cada cliente recibe un estado de **~400 a 600 bytes** (8 discos) **30 veces por segundo**. Casi todo es **E/S**: la física de 8 discos son 28 pares de colisión por tick y sala.
+- **Estado compartido y pequeño, por sala**: cada sala es un mundo que solo ven sus jugadores. La difusión (un dato → 8 clientes) es el patrón dominante, y el trabajo crece con el número de salas, no con N×N global.
 - Conexiones **largas** (una partida entera), no peticiones cortas.
 
 ## 2. Qué se midió y cómo
@@ -44,21 +44,23 @@ Este documento define la carga, mide los cuatro modelos candidatos con ella
 4. **El error clásico se ve con datos.** Con un solo hilo difundiendo en fila, **un cliente que no lee frena a los 300** (28 → 13,9 Hz). Es el head-of-line blocking que la rúbrica pide evitar, y la demo `demo/race-bug` lo reproduce en el código real.
 5. **`asyncio` con buzón por cliente es el más barato a esta carga** y no se frena con el zombi: el `drain` del zombi solo detiene a *su* tarea; el tick sigue y le pisa el estado viejo (`mailbox_overwrites`).
 
-## 4. El servidor real (con WebSocket, física, ping, métricas)
+## 4. El servidor real (con WebSocket, física, ping, métricas, salas)
 
-100 bots conectados (el tope), 12 jugando, midiendo con `tools/monitor.py`:
+100 bots conectados (el tope) que forman **13 salas** y juegan **a la vez** (el peor caso: todas en `playing`, 30 Hz), midiendo con `tools/monitor.py`:
 
 | Dato | Valor | Presupuesto |
 | --- | --- | --- |
 | Ticks por segundo | 29,9 | 30 |
-| Duración del tick, p50 / p99 / máx | **0,3 / 0,9 / 1,3 ms** | 33 ms |
+| Duración del tick, p50 / p99 / máx | **0,9 / 2,0 / 2,7 ms** (picos con las 13 salas jugando) | 33 ms |
 | Ticks pasados de presupuesto | 0 | — |
-| Latencia RTT del cliente (ping → pong), p50 | 0,4 ms | — |
-| Salida con 12 jugando | ~460 KB/s | — |
-| Memoria / CPU | 25 MB / 5 a 9 % | — |
+| Latencia RTT del cliente (ping → pong), p50 | 0,5 ms | — |
+| Salida con las 100 jugando | ~790 KB/s | — |
+| Memoria / CPU | 25 MB / 8 a 16 % | — |
 | Descriptores | 107 (100 clientes + 7 base) | — |
 
-El tick usa **~3 %** de su presupuesto. Por eso **no** se mueve la física a otro hilo: sería complejidad (cerrojos, copias del estado) para ganar tiempo que sobra, y con GIL tampoco habría paralelismo real.
+El tick usa **~3 % de su presupuesto (p50), ~6 % en el p99 y 8 % en el máximo**, aun avanzando 13 partidas. Por eso **no** se mueve la física a otro hilo: sería complejidad (cerrojos, copias del estado) para ganar tiempo que sobra, y con GIL tampoco habría paralelismo real.
+
+Antes de pasar a salas (una sola arena de 12 con cola) el mismo experimento daba p50 0,3 / p99 0,9 ms: las salas cuestan más CPU porque **juegan más a la vez** (100 discos activos en lugar de 12), pero cada tick sigue muy por debajo del presupuesto.
 
 ## 5. Decisión
 
