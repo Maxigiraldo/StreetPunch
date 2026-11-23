@@ -1,7 +1,7 @@
 # Bitácora de IA — StreetPunch
 
 Registro de cada error real encontrado en el código que generó la IA (Claude Code).
-La meta son al menos 5 entradas, priorizando concurrencia y sockets
+La meta son al menos 5 entradas (hay 12), priorizando concurrencia y sockets
 (ver `docs/diseno.md`, P11).
 
 Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
@@ -223,3 +223,49 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
 - **Corrección:** quitar el arranque automático (`LOBBY_WAIT_S` eliminado). `Waiting` solo arranca con la orden `start` del anfitrión (`server/domain/round_states.py`, `World.host()` y `request_start`). Una orden sin mínimo de jugadores se descarta y no queda guardada.
 - **Por qué es un error:** un estado que "recuerda" una decisión de una situación anterior (el grupo ya estaba reunido) sin que nada lo invalide es estado oculto; y la corrección a medias (añadir un temporizador) trató el síntoma, no que nadie decidía cuándo estaban "todos".
 - **Cómo se verificó:** pruebas nuevas en `tests/test_round_states.py` (la sala no arranca sola ni llena, solo el anfitrión inicia, el anfitrión pasa al siguiente si se va, una orden sin mínimo no queda pendiente, una orden dada en plena ronda no cuenta); y con 30 bots más Max: nada arrancó sin su orden, y una segunda tanda de 5 bots quedó en la sala sin disparar ninguna ronda.
+
+### 10. La cola de turnos reordenaba un diccionario compartido: quien ya había jugado volvía a ser el primero
+
+- **Fecha y paso:** 2026-11-22 · P5/P7 (50 bots contra el servidor real)
+- **Detectado por:** Max, jugando, y la IA encontró la causa al medirlo.
+- **Prompt:**
+  > "...yo solo contra bot0, en la segunda yo contra el bot0 hasta el bot11 [...] tampoco se define cuando un espectador entra a jugar"
+- **Qué generó la IA:** la rotación (RF-03) se hacía al empezar cada ronda moviendo al **final de `World.players`** a quienes iban a jugar; la cola era el orden del propio diccionario.
+- **Problema (categoría: concurrencia / estado compartido):** el orden de llegada y el turno eran **el mismo dato**. Quien llegaba *después* de empezar una ronda quedaba detrás de los que ya habían jugado, así que el mismo grupo volvía a ser el primero de la cola (Max jugó las rondas 1 y 2 seguidas; con 50 bots tampoco entraban todos).
+- **Corrección:** separar los dos datos. `players` ya no se reordena nunca; el turno se calcula aparte en `World.queue()` (`server/domain/world.py`), ordenando por (última ronda jugada, orden de llegada):
+  ```diff
+  -self.players = {**{p: ... for p in resto}, **{p: ... for p in jugaron}}   # reordenar para rotar
+  +def queue(self):
+  +    arrival = {pid: i for i, pid in enumerate(self.players)}
+  +    return sorted(self.players, key=lambda pid: (self._last_round.get(pid, 0), arrival[pid]))
+  ```
+- **Por qué es un error:** mutar una estructura compartida para codificar una regla (el turno) acopla dos significados en un solo dato; cualquier cambio de membresía a mitad de camino (alguien llega, alguien se va) rompe la regla. Un dato derivado se calcula, no se almacena.
+- **Cómo se verificó:** pruebas nuevas en `tests/test_world.py` (llegadas tardías y rotación justa); con 50 bots entrando después de Max: 12 jugadores por ronda, sin repetidos, y 48 de 51 distintos jugaron en 4 rondas. Quedó **sin explicar del todo** un caso que Max vio después (la lista pasando del bot 0 al 10 y luego "sacar al 10 y meter al 11"): con bots que se desconectan por su `--duration` la cola cambia legítimamente, pero no lo reproduje de forma aislada.
+
+### 11. `transport.abort()` no cortaba al cliente zombi: el socket quedaba en FIN-WAIT-1 y el búfer del kernel era de megabytes
+
+- **Fecha y paso:** 2026-11-22 · P7 (cliente lento, medido con `ss` y `TCP_INFO`)
+- **Detectado por:** la IA, al medir lo que el código P6 decía que hacía.
+- **Prompt:**
+  > "sigue con p7" (herramientas de carga: cliente lento y descriptores).
+- **Qué generó la IA:** un plazo de escritura (`WRITE_TIMEOUT_S`) que al vencer llamaba `writer.transport.abort()` y se daba por cerrado el caso.
+- **Problema (categoría: sockets):** dos fallos medidos. (1) El kernel hace *autotuning* del búfer de envío (~2,6 MB por conexión): un zombi tardaba **más de 10 minutos** en llenarlo, así que el plazo de escritura nunca vencía. (2) Cuando por fin vencía, `abort()` de asyncio cierra con **FIN**, que no sale con la ventana del receptor en cero: el socket quedaba en `FIN-WAIT-1` reteniendo su descriptor.
+- **Corrección:** limitar el envío con `SO_SNDBUF` = 64 KB (`SEND_BUFFER_BYTES`, `server/adapters/listener.py`) y abortar con RST (`SO_LINGER` 1,0) en `server/adapters/net_util.py:abort_with_reset`.
+- **Por qué es un error:** se confió en el nombre de la función (`abort`) sin mirar qué paquetes salen. El requisito era liberar el descriptor del zombi; la verificación correcta es el estado TCP del socket, no que la llamada retorne.
+- **Cómo se verificó:** `tools/slow_client.py` mira el estado con `TCP_INFO` (no con `recv`, que seguía viendo datos tras el RST) y `ss -tan`; con la corrección el zombi queda cortado y el descriptor liberado. De paso la herramienta tenía su propio fallo (sus pings renovaban el plazo de inactividad del servidor y lo engañaban), corregido con un `dup()` del descriptor solo para observar.
+
+### 12. Cifras falsas contra `asyncio` por culpa del generador de carga, y vigilantes que se buscaban a sí mismos
+
+- **Fecha y paso:** 2026-11-22 · P10 (`tools/model_bench.py`)
+- **Detectado por:** la IA, al ver resultados incoherentes antes de escribirlos en el documento.
+- **Prompt:**
+  > "Sigamos con p10 a p12" (justificar el modelo de concurrencia con números medidos).
+- **Qué generó la IA:** un benchmark con **un solo proceso** de clientes. A 1000 clientes salió "asyncio: 0/1000 sanos" mientras `fork` salía perfecto, y a 300 los hilos daban 14 Hz. Además, dos esperas en segundo plano con `pgrep -f tools/model_bench.py` coincidían con su **propia** línea de comandos y nunca terminaban (la misma trampa de la entrada 6).
+- **Problema (categoría: concurrencia / medición):** el cuello de botella era el **generador de carga** (30 000 lecturas/s en un solo proceso de Python), no el servidor; atribuirlo al modelo habría dado una conclusión falsa en el documento. Después, con el generador repartido, quedó un segundo artefacto: el servidor de prueba de `asyncio` usaba el backlog 100 por defecto (la entrada 4 otra vez).
+- **Corrección:** repartir los clientes en hasta 8 procesos (`run_clients_parallel`) y `backlog=1024` en el servidor de prueba; esperar archivos de resultado en vez de `pgrep -f`.
+  ```diff
+  -res = asyncio.run(run_clients(port, n, seconds, zombie))
+  +res = run_clients_parallel(port, n, seconds, zombie)   # varios procesos: el generador no limita
+  ```
+- **Por qué es un error:** una herramienta de medición también se audita. Hasta no comprobar el generador, los números "confirmaban" lo que se esperaba (que los hilos son peores) por una razón equivocada. Después de corregir, la conclusión sobre los hilos se mantiene, pero con datos distintos (300 clientes: 26,5 Hz y 165 % de CPU, no 14 Hz).
+- **Cómo se verificó:** `asyncio` a 1000 clientes pasó de 580/1000 a 1000/1000 con `backlog=1024`; las cifras finales están en `docs/modelo-concurrencia.md`, que además declara que la causa del backlog es consistente con la teoría pero no se comprobó con contadores del kernel.
