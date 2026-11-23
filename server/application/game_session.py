@@ -100,13 +100,13 @@ class GameSession:
 
     # ------------- el tick -------------
 
-    def tick(self) -> None:
+    async def tick(self) -> None:
         self._tick += 1
         self._apply_membership()
         self._apply_inputs()
         self._state = self._state.on_tick(self.world)
         self._publish_roster_if_changed()
-        self._publish()
+        await self._publish()
 
     def _publish_roster_if_changed(self) -> None:
         """El roster (id, nombre y color de TODOS, en orden de cola, más el anfitrión) solo se
@@ -157,14 +157,15 @@ class GameSession:
         return Snapshot(self._tick, self._state.PHASE, self._state.remaining_s,
                         self._state.winner, dict(self.world.scores), discs)
 
-    def _publish(self) -> None:
+    async def _publish(self) -> None:
         data = self._encoder.encode_state(self._snapshot())   # UNA vez por tick
-        # Se recorre el dict sin riesgo de "dictionary changed size during
-        # iteration": solo el tick lo modifica, y on_snapshot no hace await.
+        # !!! VERSIÓN MALA: se espera el envío de cada cliente EN el recorrido.
+        # Mientras dura un await, otras tareas pueden borrar de este mismo
+        # diccionario (ver ClientSession.run) y el `for` revienta.
         for player_id, observer in self._observers.items():
             policy = self._policies[self.world.role_of(player_id)]
             if policy.should_send(self._tick):
-                self._notify(observer, observer.on_snapshot, data)
+                await observer.send_now(data)
 
     @staticmethod
     def _notify(observer: SnapshotObserver, method, data: bytes) -> None:
@@ -192,7 +193,7 @@ class GameSession:
         while True:
             started = loop.time()
             try:
-                self.tick()
+                await self.tick()
             except Exception:
                 # Un bug en la lógica no debe congelar el juego para todos.
                 log.exception("fallo dentro del tick %d", self._tick)
