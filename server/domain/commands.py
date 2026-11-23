@@ -34,8 +34,8 @@ class Command(ABC):
 
     def run(self, hall: "Hall") -> None:
         """Lo llama el tick. Busca la sala del jugador y ejecuta ahí; si está
-        en el vestíbulo (o ya se fue) la orden se ignora, como la de un espectador
-        antes. Es doble despacho: el tick no distingue tipos de comando."""
+        en el vestíbulo (o ya se fue) la orden se ignora.
+        Es doble despacho: el tick no distingue tipos de comando."""
         world = hall.world_of(self.player_id)
         if world is not None:
             self.execute(world)
@@ -114,7 +114,7 @@ class MoveCommand(Command):
 
     def execute(self, world: World) -> None:
         disc = world.disc(self.player_id)
-        if disc is None:  # espectador o ya se fue: se ignora
+        if disc is None:  # no hay ronda en marcha o ya se fue: se ignora
             return
         disc.set_move(Vec2(self.dx, self.dy))
 

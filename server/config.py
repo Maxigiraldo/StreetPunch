@@ -32,8 +32,8 @@ class Config:
     # este equipo somaxconn = 4096 (medido en P0), así que se usa 128 tal cual.
     LISTEN_BACKLOG: int = 128
 
-    # Tope propio de conexiones simultáneas (asyncio.Semaphore). Son 12
-    # jugadores + ~50 espectadores + margen. El límite del sistema operativo
+    # Tope propio de conexiones simultáneas (asyncio.Semaphore). Caben ~13 salas
+    # de 8 jugadores (MAX_ROOM_PLAYERS) con margen. El límite del sistema operativo
     # (ulimit -n) es otro tema: este tope existe para que la memoria y el
     # ancho de banda sigan acotados.
     MAX_CONNECTIONS: int = 100

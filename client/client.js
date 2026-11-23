@@ -110,7 +110,7 @@ function pushSnapshot(state) {
   const now = performance.now();
   const last = timeline.snapshots[timeline.snapshots.length - 1];
   if (last) {
-    // Intervalo medio entre estados (media móvil): 33 ms para jugadores, 100 ms para espectadores.
+    // Intervalo medio entre estados (media móvil): 33 ms jugando, 100 ms en espera/cuenta atrás.
     const gap = now - last.t;
     timeline.interval = timeline.interval === null
       ? gap
@@ -472,7 +472,7 @@ function nameOf(id) {
   return session.roster.get(id)?.name ?? `#${id}`;
 }
 
-// Se juega si el propio id aparece en `d`; si no, se es espectador (docs/protocolo.md §4).
+// Se juega si el propio id aparece en `d` (fuera de ronda `d` está vacío: docs/protocolo.md §4).
 function amPlaying(state) {
   return state.d.some((disc) => disc[0] === session.me);
 }
