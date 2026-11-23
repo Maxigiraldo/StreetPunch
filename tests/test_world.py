@@ -164,3 +164,56 @@ def test_rotacion_justa_todos_juegan_antes_de_que_alguien_repita(world):
         played += list(world.discs)
         world.end_round()
     assert set(played[: total]) == set(range(1, total + 1))    # las primeras `total` plazas son todos distintos
+
+
+# ---------------- justicia de la rotación (informe de Max: "el anfitrión casi siempre juega") ----------------
+
+def play_rounds(world: World, rounds: int) -> dict[int, int]:
+    played = {pid: 0 for pid in world.players}
+    for _ in range(rounds):
+        world.start_round()
+        for pid in world.discs:
+            played[pid] += 1
+        world.end_round()
+    return played
+
+
+@pytest.mark.parametrize("n", [14, 20, 50])
+def test_rotacion_reparte_las_rondas_por_igual(n):
+    """Con 14 jugadores y 12 plazas, desempatar por orden de llegada hacía que los
+    jugadores 1 a 10 (anfitrión incluido) jugaran TODAS las rondas."""
+    world = World(CFG, Arena(CFG.ARENA_RADIUS))
+    for i in range(1, n + 1):
+        world.add_player(i, f"p{i}")
+    played = play_rounds(world, 3 * n)
+    assert set(played.values()) == {3 * CFG.MAX_ACTIVE_PLAYERS}   # exactamente igual para todos
+
+
+def test_el_anfitrion_se_queda_fuera_alguna_vez_si_hay_mas_jugadores_que_plazas():
+    world = World(CFG, Arena(CFG.ARENA_RADIUS))
+    for i in range(1, 15):
+        world.add_player(i, f"p{i}")
+    host = world.host()
+    sat_out = 0
+    for _ in range(14):                       # 14 rondas = una vuelta completa de la cola
+        world.start_round()
+        sat_out += host not in world.discs
+        world.end_round()
+    assert sat_out >= 1
+
+
+def test_nadie_espera_mas_de_una_vuelta_de_cola():
+    """Cota de espera: con n jugadores y k plazas, nadie pasa más de ceil(n/k) rondas sin jugar."""
+    n, k = 30, CFG.MAX_ACTIVE_PLAYERS
+    world = World(CFG, Arena(CFG.ARENA_RADIUS))
+    for i in range(1, n + 1):
+        world.add_player(i, f"p{i}")
+    since = {pid: 0 for pid in world.players}
+    worst = 0
+    for _ in range(60):
+        world.start_round()
+        for pid in world.players:
+            since[pid] = 0 if pid in world.discs else since[pid] + 1
+            worst = max(worst, since[pid])
+        world.end_round()
+    assert worst <= -(-n // k)

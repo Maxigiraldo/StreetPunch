@@ -34,7 +34,9 @@ class World:
         # quedaban detrás de quienes ya habían jugado y el mismo grupo volvía
         # a ser el primero de la cola (visto con 50 bots).
         self.players: dict[int, Player] = {}
-        self._last_round: dict[int, int] = {}   # id -> número de la última ronda que jugó
+        # id -> (número de la última ronda que jugó, su puesto en ESA ronda). El puesto
+        # es lo que hace rotar la cola: ver queue().
+        self._turn: dict[int, tuple[int, int]] = {}
         self._round_no = 0
         # Discos de la ronda actual (vivos y eliminados). Vacío fuera de ronda.
         self.discs: dict[int, Disc] = {}
@@ -53,7 +55,7 @@ class World:
     def remove_player(self, player_id: int) -> None:
         # pop con valor por defecto: un LeaveCommand repetido no falla.
         self.players.pop(player_id, None)
-        self._last_round.pop(player_id, None)
+        self._turn.pop(player_id, None)
         self.discs.pop(player_id, None)   # RF-04: su disco desaparece
         self.scores.pop(player_id, None)
 
@@ -73,12 +75,18 @@ class World:
         return requested
 
     def queue(self) -> list[int]:
-        """Orden de turno: primero quienes NUNCA han jugado o jugaron hace más
-        rondas, y a igualdad, por orden de llegada. Cada ronda toma a los
-        MAX_ACTIVE_PLAYERS primeros. Es determinista y justo: nadie vuelve a
-        jugar mientras haya alguien que lleva más rondas esperando."""
+        """Orden de turno. Se ordena por (última ronda jugada, puesto que tuvo en ella):
+          * quienes NUNCA han jugado van primero, por orden de llegada;
+          * luego los que llevan más rondas sin jugar;
+          * y a igualdad, en el MISMO orden en que estaban en la cola de esa ronda.
+        Lo último es lo que rota. Desempatar por orden de llegada era un error: la
+        llegada no cambia nunca, así que los primeros ganaban todos los empates y
+        jugaban TODAS las rondas (con 14 jugadores y 12 plazas, el anfitrión jugó
+        42 de 42 y los 11 a 14 solo la mitad). Con el puesto de la ronda anterior el
+        que se quedó fuera pasa adelante y los que jugaron dan la vuelta, como una
+        cola circular."""
         arrival = {pid: i for i, pid in enumerate(self.players)}
-        return sorted(self.players, key=lambda pid: (self._last_round.get(pid, 0), arrival[pid]))
+        return sorted(self.players, key=lambda pid: self._turn.get(pid, (0, arrival[pid])))
 
     def player_count(self) -> int:
         return len(self.players)
@@ -104,11 +112,11 @@ class World:
         self._round_no += 1
         points = self.arena.spawn_points(len(chosen), self._cfg.SPAWN_RING_FRACTION)
         self.discs = {}
-        for player_id, pos in zip(chosen, points):
+        for slot, (player_id, pos) in enumerate(zip(chosen, points)):
             # Cada disco nace mirando al centro: una embestida sin moverse
             # va hacia la pelea, no hacia el vacío.
             self.discs[player_id] = Disc(player_id, pos, facing=(-pos).normalized())
-            self._last_round[player_id] = self._round_no
+            self._turn[player_id] = (self._round_no, slot)
 
     def end_round(self) -> None:
         self.discs = {}

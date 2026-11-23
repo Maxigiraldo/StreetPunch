@@ -269,3 +269,19 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
   ```
 - **Por qué es un error:** una herramienta de medición también se audita. Hasta no comprobar el generador, los números "confirmaban" lo que se esperaba (que los hilos son peores) por una razón equivocada. Después de corregir, la conclusión sobre los hilos se mantiene, pero con datos distintos (300 clientes: 26,5 Hz y 165 % de CPU, no 14 Hz).
 - **Cómo se verificó:** `asyncio` a 1000 clientes pasó de 580/1000 a 1000/1000 con `backlog=1024`; las cifras finales están en `docs/modelo-concurrencia.md`, que además declara que la causa del backlog es consistente con la teoría pero no se comprobó con contadores del kernel.
+
+### 13. La corrección de la cola desempataba por orden de llegada: los primeros jugaban todas las rondas
+
+- **Fecha y paso:** 2026-11-22 · P5/P7 (la misma cola de la entrada 10, ya "corregida")
+- **Detectado por:** Max, jugando con 14 pestañas y luego con bots.
+- **Prompt:**
+  > "El anfitrion casi siempre juega. al principio cree 14 navegadores y jugue mientras pero siempre los jugadores iban saliendo despues del anfitrion [...] luego las quité y metí bots y ahí si el anfitrion no jugó"
+- **Qué generó la IA:** `World.queue()` ordenaba por `(última ronda jugada, orden de llegada)`. Resolvía el caso de la entrada 10 (los que llegan tarde ya no quedan detrás de quienes jugaron), pero dejaba un defecto que mi verificación con 50 bots no vio porque solo miré que "nadie repitiera" en 4 rondas.
+- **Problema (categoría: concurrencia / estado compartido, de lógica de turnos):** el orden de llegada **no cambia nunca**, así que en cada empate ganaban los más antiguos. Con 14 jugadores y 12 plazas, los jugadores 1 a 10 (anfitrión incluido) jugaban **todas** las rondas y los 11 a 14 se turnaban de dos en dos. Medido en el dominio: el anfitrión jugó **42 de 42** rondas y los 11 a 14 solo la mitad. Con 20 jugadores, del 5 al 20 jugaban mucho menos. Con 50 bots no se notó a corto plazo.
+- **Corrección:** el desempate pasa a ser el **puesto que tuvo cada jugador en la ronda anterior** (`server/domain/world.py`), así la cola da la vuelta como una cola circular:
+  ```diff
+  -key=lambda pid: (self._last_round.get(pid, 0), arrival[pid])
+  +key=lambda pid: self._turn.get(pid, (0, arrival[pid]))   # _turn[pid] = (ronda, puesto en ella)
+  ```
+- **Por qué es un error:** una regla de "turno justo" se verificó mirando un caso (50 bots, 4 rondas) en vez de la propiedad que importa: **a largo plazo todos juegan por igual**. Un desempate por un dato inmutable es un sesgo permanente.
+- **Cómo se verificó:** `tests/test_world.py` (`test_rotacion_reparte_las_rondas_por_igual` con 14, 20 y 50 jugadores: cada uno juega exactamente 36 de 108 plazas en `3·n` rondas; `test_el_anfitrion_se_queda_fuera_alguna_vez...`; `test_nadie_espera_mas_de_una_vuelta_de_cola`). Las pruebas de reparto **fallan** con el código anterior (comprobado) y pasan con el nuevo. Nota: con 14 jugadores y 12 plazas, jugar 12 de cada 14 rondas (86 %) es lo **correcto**; lo incorrecto era 100 % para unos y 50 % para otros.
