@@ -118,7 +118,7 @@ class GameSession:
 
     # ------------- el tick -------------
 
-    def tick(self) -> None:
+    async def tick(self) -> None:
         self._tick += 1
         self._apply_membership()
         self._apply_inputs()
@@ -126,7 +126,7 @@ class GameSession:
         self._publish_notices()
         self._publish_rooms_if_changed()
         self._publish_rosters_if_changed()
-        self._publish_states()
+        await self._publish_states()
 
     def _apply_membership(self) -> None:
         while self._membership:
@@ -208,16 +208,17 @@ class GameSession:
         return Snapshot(self._tick, room.phase, room.state.remaining_s,
                         room.state.winner, dict(world.scores), discs)
 
-    def _publish_states(self) -> None:
-        # Se recorre sin riesgo de "dictionary changed size during iteration":
-        # solo el tick modifica estas estructuras, y on_snapshot no hace await.
+    async def _publish_states(self) -> None:
+        # !!! VERSIÓN MALA: se espera el envío de cada cliente EN el recorrido.
+        # Mientras dura un await, otras tareas pueden borrar de estos mismos
+        # diccionarios (ver ClientSession.run) y el `for` revienta.
         for room in self.hall.rooms.values():
             if not self._policies[room.phase].should_send(self._tick):
                 continue
             data = self._encoder.encode_state(self._snapshot(room))   # UNA vez por sala y tick
             for player_id in room.world.players:
                 if (observer := self._observers.get(player_id)) is not None:
-                    self._notify(observer, observer.on_snapshot, data)
+                    await observer.send_now(data)
 
     @staticmethod
     def _notify(observer: SnapshotObserver, method, data: bytes) -> None:
@@ -245,7 +246,7 @@ class GameSession:
         while True:
             started = loop.time()
             try:
-                self.tick()
+                await self.tick()
             except Exception:
                 # Un bug en la lógica no debe congelar el juego para todos.
                 log.exception("fallo dentro del tick %d", self._tick)

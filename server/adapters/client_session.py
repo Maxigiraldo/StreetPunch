@@ -89,6 +89,16 @@ class ClientSession(SnapshotObserver):
         self._mailbox = data
         self._event.set()
 
+    async def send_now(self, data: bytes) -> None:
+        """!!! VERSIÓN MALA (rama demo/race-bug) !!!
+        El tick escribe y espera `drain()` por cada cliente. Viola AGENTS.md §4.2
+        y §4.4: (1) un cliente que no lee deja al tick esperando y todos los
+        demás se congelan (head-of-line blocking); (2) este `await` cede el
+        control: otras tareas corren con el recorrido de la sala a medias.
+        Además escribe en el socket una tarea que no es el writer."""
+        self._writer.write(data)
+        await self._writer.drain()      # sin plazo: un cliente zombi la deja colgada
+
     def request_shutdown(self) -> None:
         """Pide cerrar con 1001 (el servidor se apaga). Sin await: solo deja
         la trama close en la casilla; el writer la envía (sigue habiendo un
@@ -142,7 +152,12 @@ class ClientSession(SnapshotObserver):
                     log.error("cliente %d: %r", self.player_id, result, exc_info=result)
             # Pase lo que pase, el tick se entera. Si nunca mandó hello, es
             # un Disconnect de un id desconocido y no hace nada.
-            self._game.submit_membership(Disconnect(self.player_id))
+            # !!! VERSIÓN MALA: borrado directo desde la tarea del cliente, sin
+            # comando. Viola AGENTS.md §4.1 (único escritor): si el tick está
+            # a mitad de su `for` sobre los jugadores de una sala (en un await),
+            # ese diccionario cambia de tamaño bajo sus pies.
+            self._game.hall.disconnect(self.player_id)
+            self._game._observers.pop(self.player_id, None)
 
     # ---------------- reader ----------------
 
