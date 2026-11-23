@@ -20,10 +20,12 @@ python3 -m venv .venv && .venv/bin/pip install pytest      # solo para las prueb
 .venv/bin/python -m server.main                            # sirve en http://localhost:8080
 ```
 
-Abre `http://localhost:8080` en varias pestañas. **El primero en entrar es el
-anfitrión**: ve a todos los de la sala y pulsa «Iniciar partida». Controles:
-flechas o WASD para moverse; Espacio (o J / K) mantenido para cargar y soltado
-para embestir.
+Abre `http://localhost:8080` en varias pestañas. Al entrar verás el **vestíbulo**
+con la lista de salas: **crea una** (eres su anfitrión) o **únete** a una abierta.
+Cada sala admite hasta 8 jugadores y **todos juegan cada ronda**; con la sala
+llena o jugando no se puede entrar. El anfitrión pulsa «Iniciar partida» cuando
+están todos. Controles: flechas o WASD para moverse; Espacio (o J / K) mantenido
+para cargar y soltado para embestir.
 
 Con `Ctrl+C` o `kill -TERM <pid>` el servidor se apaga en orden (close 1001 a
 cada cliente).
@@ -39,10 +41,10 @@ cada cliente).
 
 | Herramienta | Para qué |
 | --- | --- |
-| `monitor.py` | Una línea por segundo: ticks/s, p50/p99 del tick, RTT, conexiones, descriptores, memoria, CPU, alertas. Lee `GET /metrics` y `/proc`. |
-| `bots.py --count 50 [--host]` | N jugadores simulados (responden los ping). `--host`: el bot 0 inicia las rondas. |
-| `slow_client.py [--mode trickle] [--keepalive]` | Cliente que no lee: demuestra que no frena a los demás. |
-| `churn.py` | Conexiones que se abren y cierran de todas las formas (limpia, brusca, sin hello, basura...). |
+| `monitor.py` | Una línea por segundo: ticks/s, p50/p99 del tick, RTT, conexiones, salas, jugadores, descriptores, memoria, CPU, alertas. Lee `GET /metrics` y `/proc`. |
+| `bots.py --count 50 [--room N] [--no-host]` | N jugadores simulados (responden los ping). Se unen a una sala abierta o crean la suya y la inician. `--room N`: solo a la tuya. |
+| `slow_client.py [--mode trickle] [--keepalive] [--room N]` | Cliente que no lee: demuestra que no frena a los demás. |
+| `churn.py` | Conexiones que se abren y cierran de todas las formas (limpia, brusca, sin hello, basura..., y crear/abandonar salas). |
 | `leakcheck.py`, `fd_watch.sh` | Fugas de descriptores y `CLOSE_WAIT`. |
 | `model_bench.py` | Compara asyncio, hilo por cliente, pool, proceso por cliente con la misma carga. |
 | `scenario_check.py` | 11 comprobaciones de física/ronda contra el servidor real. |
@@ -62,7 +64,7 @@ cada cliente).
 ## Estructura
 
 ```
-server/domain/       juego puro (sin red ni asyncio)
+server/domain/       juego puro (sin red ni asyncio): Hall, Room, World, fases, física
 server/application/  el tick (GameSession), puertos y políticas de envío
 server/adapters/     listener, saludo HTTP, WebSocket, codec, ClientSession
 server/main.py       único lugar que arma los objetos y registra las señales

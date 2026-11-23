@@ -10,7 +10,7 @@ Terminales sugeridas: **T1** servidor, **T2** monitor, **T3** herramientas, más
 
 - [ ] Nada escuchando en 8080: `ss -tlnp | grep 8080` no debe mostrar nada.
 - [ ] `cd` al repo, `.venv` creado, rama `main` limpia (`git status`).
-- [ ] `.venv/bin/python -m pytest -q` en verde (193 pruebas, ~15 s). Si algo falla, **no sigas**: arréglalo antes.
+- [ ] `.venv/bin/python -m pytest -q` en verde (229 pruebas, ~22 s). Si algo falla, **no sigas**: arréglalo antes.
 - [ ] Navegador con una pestaña en `http://localhost:8080` (se usa en el paso 2).
 - [ ] OBS grabando. Un respaldo en video del paso 5 (es el más largo).
 - [ ] Plan A = todo en `localhost`; no dependes de internet.
@@ -31,39 +31,41 @@ Salida esperada: `LISTEN 0 128 127.0.0.1:8080 ... users:(("python",pid=...,fd=3)
 - En `ss` de un socket en LISTEN, **Send-Q = backlog** (128, la cola de aceptación que pedí) y **Recv-Q = cuántas conexiones ya completaron el saludo y esperan `accept()`** (0 ahora).
 - `fd=3`: los descriptores 0, 1 y 2 son stdin/stdout/stderr; el socket de escucha es el primero libre.
 
-## 2. Pestañas del navegador + bots (2 min)
+## 2. Salas: pestañas del navegador + bots (2 min)
 
 ```bash
 # T2
 .venv/bin/python tools/monitor.py
 ```
 
-1. Abre 2 pestañas y entra con distinto nombre. La **primera es el anfitrión**: ve a los de la sala y pulsa «Iniciar partida».
-2. Juega unos segundos: moverse con flechas, mantener Espacio y soltar para embestir.
-3. Lanza bots (sin `--host`: el anfitrión eres tú en el navegador, que entró primero):
+1. Abre 2 pestañas y entra con distinto nombre. Verás el **vestíbulo**: la lista de salas (vacía) y el botón «Crear sala».
+2. En la pestaña 1 pulsa **Crear sala** (eres el anfitrión; el estado dice «Estás en la sala N»). En la pestaña 2 aparece la sala en la lista: **Unirse**. En la 1 pulsa **Iniciar partida**.
+3. Juega unos segundos: flechas, mantener Espacio y soltar para embestir.
+4. Lanza bots **sin** `--room`: forman sus propias salas.
 
 ```bash
 # T3
 .venv/bin/python tools/bots.py --count 50 --duration 60
 ```
 
-**Qué mostrar en el monitor:** `tick/s` ≈ 30, `p50/p99` del tick (0,3 / 0,9 ms frente a un presupuesto de 33 ms), `conn`, `juega` (12), y `out KB/s`.
-**Qué decir:** 12 juegan a 30 Hz y el resto mira a 10 Hz (Strategy `SendPolicy`); la cola de turnos es justa (los que más rondas llevan sin jugar entran primero).
+**Qué mostrar en el monitor:** `salas` (~7), `juega` (50), `lobby` (0), `tick/s` ≈ 30 y el tick a `p50/p99` ≈ 0,5 / 1,5 ms frente a un presupuesto de 33 ms.
+**Qué decir:** cada sala es una partida independiente (su propio `World` y su propia fase) y **un solo tick las avanza todas**: sigue habiendo un único escritor. Una sala llena (8) o jugando no deja entrar: ya no hay cola ni espectadores, y todos juegan cada ronda. Con 100 bots hay ~13 salas jugando a la vez y el tick sigue en p99 ≈ 2 ms.
+**Para que los bots se unan a TU sala:** crea la sala en el navegador, mira su número y lanza `bots.py --count 7 --room N`.
 
 ## 3. Cliente lento: no frena a nadie (2 min)
 
-Un zombi solo llena el búfer si **está dentro de una ronda en marcha** (en la sala de espera casi no recibe datos). Orden:
+Un zombi solo llena el búfer si **está dentro de una sala que juega** (en el vestíbulo o en la sala de espera casi no recibe datos). Orden:
 
-1. Con el servidor **limpio** (reinícialo), entra tú desde el navegador (anfitrión).
-2. En T3 lanza el zombi **antes** de pulsar «Iniciar partida»:
+1. Con el servidor **limpio** (reinícialo), en el navegador **crea una sala** (eres el anfitrión) y anota su número.
+2. En T3 lanza el zombi, que se une a esa sala **antes** de que empiece la ronda:
 
 ```bash
-.venv/bin/python tools/slow_client.py --keepalive --seconds 60
+.venv/bin/python tools/slow_client.py --keepalive --seconds 60 --room N
 ```
 
-3. Pulsa «Iniciar partida». Mira en el monitor las columnas `ovw/s` (estados pisados) y `to` (timeouts).
+3. Pulsa «Iniciar partida» (hace falta otro jugador: abre una segunda pestaña y únete). Mira en el monitor `ovw/s` (estados pisados) y `to` (timeouts).
 
-**Resultado medido (60 s, 2 jugadores + 1 zombi vivo):** los demás siguieron a **~30 estados/s todo el tiempo**; el servidor contó `mailbox_overwrites = 299` y cortó al zombi (`write_timeouts = 1`) a los 10 s.
+**Resultado medido** (`tools/race_demo.py`, 60 s, 2 jugadores + 1 zombi vivo en la misma sala): los demás siguieron a **~30 estados/s todo el tiempo**; el servidor contó `mailbox_overwrites = 299` y cortó al zombi (`write_timeouts = 1`) a los 10 s.
 **Qué decir:** el buzón es de **tamaño 1**: si el cliente no lee, el tick le pisa el estado viejo y sigue. `drain()` solo detiene la tarea `writer` de *ese* cliente. A los 10 s (`WRITE_TIMEOUT_S`) se le aborta con RST (`abort_with_reset`, `server/adapters/net_util.py`) porque `transport.abort()` mandaría un FIN que nunca sale con la ventana en cero y el socket quedaría en `FIN-WAIT-1`. El búfer de envío del kernel se limitó a 64 KB (`SEND_BUFFER_BYTES`): el valor por defecto (~2,6 MB por conexión) tardaba más de 10 minutos en notar al zombi.
 
 ## 4. Churn y descriptores: nada se fuga (2 min)
@@ -75,7 +77,7 @@ Un zombi solo llena el búfer si **está dentro de una ronda en marcha** (en la 
 # opcional, en otra terminal: tools/fd_watch.sh 8080
 ```
 
-**Qué mostrar:** `fd` vuelve a su valor base (~7), `ESTAB` baja a 0 y `CLOSE_WAIT` queda en **0**. `churn.py` abre y cierra de todas las formas: limpia, brusca (RST), sin `hello`, JSON basura, trama sin máscara, HTTP.
+**Qué mostrar:** `fd` vuelve a su valor base (7), `ESTAB` baja a 0 y `CLOSE_WAIT` queda en **0**. `churn.py` abre y cierra de todas las formas: limpia, brusca (RST), sin `hello`, JSON basura, trama sin máscara, HTTP, y **crear y abandonar salas** (también cerrando de golpe dentro de una sala). Medido: **10 443 conexiones en 15 s** sin ninguna fuga.
 **Qué decir:** cada conexión libera su socket y su cupo del semáforo en un `finally` (`server/adapters/listener.py`), sea cual sea el camino de salida. `CLOSE_WAIT` acumulado sería la firma de una fuga: el cliente cerró y el servidor no.
 
 ## 5. El código MALO contra el bueno (2 min)
@@ -88,15 +90,15 @@ El mismo escenario, sobre la rama que rompe tres reglas a propósito (`docs/demo
 .venv/bin/python tools/race_demo.py 8080   # T3  -> ~30 estados/s siempre
 # parar T1 con Ctrl+C
 
-git checkout demo/race-bug
+git checkout demo/race-bug                         # etiqueta demo-race-bug-v2
 .venv/bin/python -m server.main 2> /tmp/malo.log   # T1 (el log va a stderr)
 .venv/bin/python tools/race_demo.py 8080           # T3  -> 0 estados/s ~10 s
-grep -c "fallo dentro del tick" /tmp/malo.log      # ~467
+grep -c "fallo dentro del tick" /tmp/malo.log      # ~221
 grep -c "dictionary changed size" /tmp/malo.log    # 0 o 1: es probabilístico
 git checkout main
 ```
 
-**Resultado medido:** bueno 30 Hz y 0 errores. Malo: **0 estados/s durante ~10 s**, ~467 `fallo dentro del tick` y, en algunas corridas, `RuntimeError: dictionary changed size during iteration` (probabilístico; la congelación sí es fiable).
+**Resultado medido (2 corridas):** bueno 30 Hz y 0 errores. Malo: **0 estados/s durante ~9 s**, **221** `fallo dentro del tick` y **1** `RuntimeError: dictionary changed size during iteration` por corrida (el error de diccionario es probabilístico; la congelación sí es fiable).
 **Qué decir:** el error clásico es `await writer.drain()` por cliente dentro del recorrido de difusión: un cliente que no lee congela a todos (head-of-line blocking), y como `await` cede el control, otra tarea borra del diccionario que el `for` está recorriendo. Con `asyncio` no hacen falta hilos para tener una condición de carrera: basta un `await` entre leer y modificar. Mi regla es **único escritor**: nadie toca el mundo salvo el tick; entrar y salir son comandos.
 
 ## 6. `ulimit -n 64`: EMFILE (1 min)
@@ -108,24 +110,24 @@ git checkout main
 .venv/bin/python tools/bots.py --count 100 --duration 15 --ramp 0.01
 ```
 
-**Resultado medido:** el proceso llegó a **64 descriptores** y el servidor **siguió vivo**; de 100 bots conectaron **57** (los demás no pudieron: no había descriptores) y nadie recibió un error de servidor. En el log salió `OSError: [Errno 24] Too many open files` y la línea `(+2942 iguales suprimidos)`.
-**Qué decir:** cuando `accept()` falla por EMFILE, `asyncio` ya reintenta cada 1 s en vez de morir, pero escribe un traceback por intento: miles. Como `logging` es **síncrono**, eso puede frenar el tick; por eso `RateLimitFilter` (`server/log_filters.py`) deja pasar una línea cada 5 s y cuenta las suprimidas. Es el riesgo conocido de que `logging` no sea asíncrono (un `QueueHandler` con hilo aparte sería la mitigación completa, no está hecha). Al soltar las conexiones el servidor se recuperó en ~2,5 s (medido en P6).
+**Resultado medido:** el proceso llegó a **64 descriptores** y el servidor **siguió vivo**; de 100 bots conectaron **57** (los demás no pudieron: no había descriptores; los bots crearon 8 salas) y nadie recibió un error de servidor. En el log salió `OSError: [Errno 24] Too many open files` y líneas como `(+2942 iguales suprimidos)` y `(+8319 iguales suprimidos)`: **11 261 líneas** que no llegaron al disco. **Al soltar las conexiones, los descriptores volvieron a 7 y las salas a 0** (medido).
+**Qué decir:** cuando `accept()` falla por EMFILE, `asyncio` ya reintenta cada 1 s en vez de morir, pero escribe un traceback por intento: miles. Como `logging` es **síncrono**, eso puede frenar el tick; por eso `RateLimitFilter` (`server/log_filters.py`) deja pasar una línea cada 5 s y cuenta las suprimidas. Es el riesgo conocido de que `logging` no sea asíncrono (un `QueueHandler` con hilo aparte sería la mitigación completa, no está hecha). 
 
 ## 7. `kill -TERM` y reinicio inmediato (1 min)
 
 ```bash
-# T1: servidor corriendo con bots conectados (tools/bots.py --count 20 --duration 60 --host)
+# T1: servidor corriendo con bots conectados (tools/bots.py --count 20 --duration 60)
 kill -TERM $(ss -ltnpH 'sport = :8080' | grep -o 'pid=[0-9]*' | cut -d= -f2)
 ss -tan | grep :8080 | awk '{print $1}' | sort | uniq -c
 .venv/bin/python -m server.main            # reinicio INMEDIATO
 ```
 
-**Resultado medido:** el servidor termina en **23 ms**; los 20 bots reciben `close 1001` (going away); quedan ~22 sockets en `TIME-WAIT`; el reinicio inmediato arranca **sin** `Address already in use`.
+**Resultado medido:** el servidor termina en **23 ms**; los 20 bots reciben `close 1001` (going away); quedan ~40 sockets en `TIME-WAIT`; el reinicio inmediato arranca **sin** `Address already in use`.
 **Qué decir:** el manejador de señal solo marca un `Event` (no puede hacer `await`); la corrutina principal manda close 1001 a cada cliente, da un plazo (`SHUTDOWN_GRACE_S`) y aborta a los rezagados. `TIME-WAIT` lo guarda el lado que cierra primero (aquí el servidor) 2×MSL ≈ 60 s para no confundir paquetes viejos con una conexión nueva; **`SO_REUSEADDR` permite hacer `bind` aunque haya sockets en `TIME-WAIT`**, por eso el reinicio funciona.
 
 ## 8. Cierre (30 s)
 
-Mostrar `docs/modelo-concurrencia.md` (tabla: asyncio 26 % de CPU frente a 165 % de hilos a 300 clientes) y `docs/arquitectura.md` (UML). Frase: "el estilo es hexagonal con único escritor; el modelo, asyncio, porque la carga es E/S de conexiones largas con difusión, y lo medí".
+Mostrar `docs/modelo-concurrencia.md` (tabla: asyncio 26 % de CPU frente a 165 % de hilos a 300 clientes; y el servidor real: 100 jugadores en 13 salas, tick p99 ≈ 2 ms) y `docs/arquitectura.md` (UML). Frase: "el estilo es hexagonal con único escritor; el modelo, asyncio, porque la carga es E/S de conexiones largas con difusión, y lo medí".
 
 ---
 
@@ -139,7 +141,7 @@ Mostrar `docs/modelo-concurrencia.md` (tabla: asyncio 26 % de CPU frente a 165 %
 
 **¿Y el GIL?** Solo un hilo ejecuta bytecode a la vez, así que los hilos no dan paralelismo de CPU. El I/O sí libera el GIL, pero con muchos hilos se pelean por él: lo medí (165 % de CPU y 7,6 Hz a 1000 clientes). Con `asyncio` hay un hilo: el GIL no estorba.
 
-**¿Por qué no mover la física a otro hilo?** El tick completo cuesta 0,3 ms (p50) de 33 ms: el 1 %. Otro hilo añadiría cerrojos y copias del estado, y por el GIL no habría paralelismo real. Si hiciera falta, sería un **proceso** por sala.
+**¿Por qué no mover la física a otro hilo?** El tick completo, con 13 salas jugando a la vez (100 jugadores), cuesta 0,9 ms (p50) y ~2 ms (p99) de 33 ms. Otro hilo añadiría cerrojos y copias del estado, y por el GIL no habría paralelismo real. Si hiciera falta, sería un **proceso** por sala.
 
 **¿Qué son las lecturas parciales?** TCP es un flujo de bytes, no de mensajes: un `read()` puede traer media trama o varias. `FrameReader` (`server/adapters/ws_frames.py`) acumula y entrega tramas completas; se prueba con tramas partidas en pedazos de 1 byte, varias juntas, longitudes 126 y 127, sin máscara y por encima del máximo.
 
@@ -151,4 +153,8 @@ Mostrar `docs/modelo-concurrencia.md` (tabla: asyncio 26 % de CPU frente a 165 %
 
 **¿Dónde hay una región crítica?** El tick completo: ningún `await` entre leer y modificar el mundo, así que no hace falta `Lock`. El tope de conexiones usa `asyncio.Semaphore` (cupo adquirido y liberado en `finally`).
 
-**¿Qué errores corrigió a la IA?** Ver `docs/bitacora-ia.md`. Los más defendibles: la **sala que arrancaba sola con estado pegado** (entrada 9), las **cifras falsas de la herramienta de pruebas** (7 y 8), y el `transport.abort()` que dejaba el socket en `FIN-WAIT-1`.
+**¿Qué errores corrigió a la IA?** Ver `docs/bitacora-ia.md`. Los más defendibles: la **sala que arrancaba sola con estado pegado** (9), la **cola de turnos injusta** (10 y 13, que acabó en rediseñar con salas), las **cifras falsas de la herramienta de pruebas** (7, 8 y 12), y el `transport.abort()` que dejaba el socket en `FIN-WAIT-1` (11).
+
+**¿Por qué salas y no una arena con cola de turnos?** Lo probamos primero: una arena de 12 con cola. Se sentía injusto (el anfitrión jugaba casi siempre y mucha gente esperaba sin turno), y la regla de rotación **falló dos veces** (entradas 10 y 13 de la bitácora). Con salas de 8 y todos jugando cada ronda no hay cola: la regla injusta desaparece en vez de arreglarse. Costó más CPU (más discos activos a la vez), pero medido sigue en ~3 % del presupuesto del tick.
+
+**¿Sigue habiendo un solo escritor con varias salas?** Sí. El tick es una sola tarea y avanza todas las salas en el mismo hilo; crear, unirse y salir de una sala son comandos que el tick ejecuta (`CreateRoomCommand`, `JoinRoomCommand`, `LeaveRoomCommand`), por la **misma cola acotada** que los movimientos, así que están sujetos al mismo límite por cliente y por tick.

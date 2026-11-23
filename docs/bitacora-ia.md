@@ -1,7 +1,7 @@
 # Bitácora de IA — StreetPunch
 
 Registro de cada error real encontrado en el código que generó la IA (Claude Code).
-La meta son al menos 5 entradas (hay 12), priorizando concurrencia y sockets
+La meta son al menos 5 entradas (hay 14), priorizando concurrencia y sockets
 (ver `docs/diseno.md`, P11).
 
 Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
@@ -285,3 +285,15 @@ Categorías: **concurrencia**, **sockets**, **protocolo**, **SOLID**.
   ```
 - **Por qué es un error:** una regla de "turno justo" se verificó mirando un caso (50 bots, 4 rondas) en vez de la propiedad que importa: **a largo plazo todos juegan por igual**. Un desempate por un dato inmutable es un sesgo permanente.
 - **Cómo se verificó:** `tests/test_world.py` (`test_rotacion_reparte_las_rondas_por_igual` con 14, 20 y 50 jugadores: cada uno juega exactamente 36 de 108 plazas en `3·n` rondas; `test_el_anfitrion_se_queda_fuera_alguna_vez...`; `test_nadie_espera_mas_de_una_vuelta_de_cola`). Las pruebas de reparto **fallan** con el código anterior (comprobado) y pasan con el nuevo. Nota: con 14 jugadores y 12 plazas, jugar 12 de cada 14 rondas (86 %) es lo **correcto**; lo incorrecto era 100 % para unos y 50 % para otros.
+
+### 14. Se parchó dos veces una regla de turnos que no debía existir: la causa era el diseño (una arena y una cola)
+
+- **Fecha y paso:** 2026-11-22 · P5/P7 (cola de turnos, entradas 9, 10 y 13)
+- **Detectado por:** Max, por cómo se sentía jugar.
+- **Prompt:**
+  > "Y si más bien hacemos varias con un limite de jugadores porque así como está se siente a veces muy injusto, y mucha gente va a quedar por ahí volando porque si"
+- **Qué generó la IA:** una arena única con hasta 12 jugadores y el resto como espectadores en una cola de turnos. Cuando Max reportó que la cola fallaba, la IA parchó la regla **dos veces** (entradas 10 y 13) en vez de preguntarse si hacía falta una cola.
+- **Problema (categoría: diseño / SOLID):** el diseño obligaba a decidir "quién juega" con una regla de equidad, y cada regla tenía un caso borde (primero reordenar el diccionario, luego desempatar por llegada). Para el usuario el problema real no era el algoritmo: esperar sin tener turno se sentía injusto por sí mismo.
+- **Corrección:** se eliminó la regla en vez de arreglarla. Salas de hasta 8 (`MAX_ROOM_PLAYERS`): cualquiera crea una, se entra solo con sitio y en espera, y **todos los de la sala juegan cada ronda**. Desaparecen `World.queue()`, los turnos y los espectadores; el dominio gana `Hall` (reglas de salas) y `Room` (un `World` y su fase), y el tick avanza todas las salas en el mismo hilo (`server/domain/hall.py`, `server/application/game_session.py`). Antes de tocar el diseño de `docs/diseno.md` (RF-03) la IA preguntó (tipo de salas, qué pasa con la sala llena, tope) y Max decidió.
+- **Por qué es un error:** parchar el síntoma dos veces fue el error de proceso: la regla de turnos nunca iba a estar bien porque su necesidad venía de un diseño con recursos escasos (una arena) que se podía evitar. La señal para replantear era la repetición del mismo fallo.
+- **Cómo se verificó:** 229 pruebas (nuevas: `tests/test_hall.py` con cada rechazo, y aislamiento entre salas en `tests/test_game_session.py` y los E2E); 50 bots forman 7 salas y los 100 forman 13 jugando a la vez, con el tick en p50 0,9 ms y p99 2 ms; `churn.py` (10 443 conexiones en 15 s, incluidas salas creadas y abandonadas) sin fugas. Una de las pruebas nuevas encontró un bug mío (con cero salas el primer cliente recibía un mensaje vacío), corregido con un centinela `None`.
