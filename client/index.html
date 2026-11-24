@@ -3,53 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090D1B">
   <title>StreetPunch</title>
-  <style>
-    body { margin: 0; background: #14161a; color: #e8e8ea; font: 16px system-ui, sans-serif; }
-    main { max-width: 680px; margin: 0 auto; padding: 16px; }
-    h1 { margin: 0 0 12px; font-size: 1.4rem; }
-    form { display: flex; gap: 8px; margin-bottom: 8px; }
-    input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #444; background: #1e2127; color: inherit; }
-    button { padding: 8px 16px; border-radius: 6px; border: 0; background: #e4572e; color: #fff; cursor: pointer; }
-    button:disabled { background: #555; cursor: default; }
-    /* El tamaño interno (640x640) lo fija el HTML; el CSS solo lo adapta a pantallas estrechas. */
-    canvas { display: block; width: 100%; height: auto; background: #0d0e11; border-radius: 8px; }
-    p { margin: 8px 0; min-height: 1.2em; }
-    #hud { font-size: 1.2rem; font-weight: 600; }
-    #scores { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
-    #scores .row { display: grid; grid-template-columns: 16px 1fr auto 6.5rem; gap: 10px; align-items: center;
-                   padding: 6px 10px; border-radius: 6px; background: #1e2127; }
-    #scores .row.me { outline: 1px solid #aab; }
-    #scores .row.eliminated { opacity: 0.55; }
-    #scores .swatch { width: 14px; height: 14px; border-radius: 50%; }
-    #scores .wins { font-weight: 700; }
-    #scores .status { color: #889; font-size: 0.85rem; text-align: right; }
-    #help { color: #889; font-size: 0.9rem; }
-    #lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    #lobby-head h2 { margin: 8px 0; font-size: 1.1rem; }
-    #rooms { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
-    #rooms .room { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
-                   padding: 8px 10px; border-radius: 6px; background: #1e2127; }
-    #rooms .room .meta { color: #889; font-size: 0.85rem; }
-    #rooms .empty { color: #889; padding: 8px 0; }
-    #bar { display: flex; gap: 8px; align-items: center; }
-  </style>
+  <!-- Favicon vacío en línea: evita el 404 de /favicon.ico (el servidor solo sirve lo de client/). -->
+  <link rel="icon" href="data:,">
+  <link rel="preload" href="/orbitron.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main>
-    <h1>StreetPunch</h1>
-    <form id="join">
-      <!-- maxlength 16 = MAX_NAME_LEN del servidor; el servidor valida de todas formas. -->
-      <input id="name" maxlength="16" placeholder="Tu nombre" autocomplete="off" required>
-      <button id="enter">Entrar</button>
-    </form>
-    <p id="status">Escribe un nombre para entrar.</p>
+    <button id="sound" type="button" aria-pressed="true" title="Activar o silenciar el sonido">Sonido on</button>
+    <h1 class="logo" aria-label="StreetPunch">
+      <svg class="crown" viewBox="0 0 40 28" aria-hidden="true"><path d="M3 26V9l9 7L20 3l8 13 9-7v17z"/><circle cx="3" cy="8" r="2.4"/><circle cx="20" cy="2.8" r="2.4"/><circle cx="37" cy="8" r="2.4"/></svg>
+      <span class="street">STREET</span><span class="punch">PUNCH</span>
+    </h1>
+    <p id="status" class="status" role="status" aria-live="polite">Escribe un nombre para entrar.</p>
+
+    <!-- Pantalla de entrada: se ve hasta que hay conexión. -->
+    <section id="entry" class="panel">
+      <h2>Entra a la arena</h2>
+      <form id="join">
+        <!-- maxlength 16 = MAX_NAME_LEN del servidor; el servidor valida de todas formas. -->
+        <input id="name" maxlength="16" placeholder="Tu nombre" autocomplete="off" required>
+        <button id="enter" class="primary">Entrar</button>
+      </form>
+    </section>
 
     <!-- Vestíbulo: se ve al conectar, hasta que entras a una sala. -->
-    <section id="lobby" hidden>
+    <section id="lobby" class="panel" hidden>
       <div id="lobby-head">
         <h2>Salas</h2>
-        <button id="create">Crear sala</button>
+        <button id="create" class="primary">Crear sala</button>
       </div>
       <ul id="rooms" aria-label="Salas disponibles"></ul>
     </section>
@@ -60,12 +44,53 @@
         <button id="start" hidden>Iniciar partida</button>
         <button id="leave">Salir de la sala</button>
       </div>
-      <canvas id="arena" width="640" height="640"></canvas>
+      <!-- El tamaño interno (640x640) lo fija el HTML; el CSS solo lo adapta a pantallas estrechas. -->
+      <div id="stage">
+        <canvas id="arena" width="640" height="640"></canvas>
+        <!-- Espera, cuenta regresiva y resultado: texto del DOM sobre el canvas, no dibujado en él. -->
+        <div id="overlay" hidden>
+          <div id="overlay-core">
+            <!-- Anillo que se vacía durante cada segundo de la cuenta regresiva (r=46 -> 289 de perímetro). -->
+            <svg id="overlay-ring" viewBox="0 0 100 100" hidden aria-hidden="true">
+              <circle class="track" cx="50" cy="50" r="46"/>
+              <circle id="ring-fill" class="fill" cx="50" cy="50" r="46"/>
+            </svg>
+            <div id="overlay-big"></div>
+          </div>
+          <div id="overlay-small"></div>
+        </div>
+        <!-- Marcador sobre el canvas (esquina superior derecha); en pantallas estrechas pasa debajo. -->
+        <aside id="board" aria-label="Marcador" hidden>
+          <div id="board-count"></div>
+          <ul id="scores"></ul>
+        </aside>
+        <!-- Resultado de la ronda: copa, ranking y salida. Reemplaza al texto central en round_over. -->
+        <div id="result" hidden>
+          <svg id="trophy" viewBox="0 0 64 64" aria-hidden="true">
+            <defs>
+              <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#F9F871"/>
+                <stop offset="1" stop-color="#FF9A1F"/>
+              </linearGradient>
+            </defs>
+            <path d="M21 12H10c0 10 4 15 12 16M43 12h11c0 10-4 15-12 16" fill="none" stroke="url(#gold)" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M20 7h24v15c0 10-5 16-12 17-7-1-12-7-12-17z" fill="url(#gold)"/>
+            <path d="M29 38h6v9h-6z" fill="url(#gold)"/>
+            <path d="M19 47h26v7H19z" fill="url(#gold)"/>
+            <path d="M32 14l2.4 5 5.4.7-4 3.7 1 5.3-4.8-2.6-4.8 2.6 1-5.3-4-3.7 5.4-.7z" fill="#090D1B" opacity=".55"/>
+          </svg>
+          <div id="result-title"></div>
+          <ol id="result-rank"></ol>
+          <button id="result-leave">Volver al vestíbulo</button>
+        </div>
+        <div id="fps" hidden></div>
+      </div>
       <p id="hud"></p>
-      <ul id="scores" aria-label="Marcador"></ul>
-      <p id="help">Moverse: flechas o WASD. Embestir: mantén Espacio (o J / K) para cargar y suelta. Un toque muy corto no embiste. Tras embestir hay 1,5 s de recarga: el anillo gris la muestra. Quien crea la sala es el anfitrión y pulsa «Iniciar partida» cuando estén todos; todos juegan cada ronda.</p>
+      <p id="help">Moverse: flechas o WASD. Embestir: mantén Espacio (o J / K) para cargar y suelta. Un toque muy corto no embiste. Tras embestir hay 1,5 s de recarga: el anillo violeta la muestra. Quien crea la sala es el anfitrión y pulsa “Iniciar partida” cuando estén todos; todos juegan cada ronda.</p>
     </section>
   </main>
+  <script src="/audio.js"></script>
+  <script src="/neon.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>

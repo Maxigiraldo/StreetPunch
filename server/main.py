@@ -32,6 +32,8 @@ CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
+    ".woff2": "font/woff2",     # Orbitron (OFL): la sirve este mismo servidor, sin CDN
+    ".mp3": "audio/mpeg",       # música y efectos del cliente (ver client/CREDITS.txt)
 }
 
 

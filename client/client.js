@@ -9,36 +9,25 @@
  */
 
 // ---- Constantes visuales (el juego en sí lo define el servidor, no el cliente) ----
+// El dibujo neón (paleta, robots, partículas, animaciones) vive en neon.js.
 const CANVAS_MARGIN_PX = 48;       // aire entre la arena y el borde del canvas: cabe un disco entero
                                    // fuera del borde, que es donde se ve caer (ELIMINATION_MARGIN_DISCS)
-const CHARGE_RING_GAP_PX = 5;      // separación entre el disco y su anillo de carga
-const CHARGE_RING_WIDTH_PX = 4;    // grosor del anillo de carga
-const OWN_OUTLINE_PX = 3;          // borde blanco para reconocer el propio disco
-const DEAD_ALPHA = 0.25;           // discos eliminados: se dibujan apagados hasta fin de ronda
-const AIM_GAP_FACTOR = 1.15;       // la flecha de puntería nace un poco fuera del disco (en radios)
-const AIM_LENGTH_FACTOR = 2.2;     // y llega hasta esta distancia del centro (en radios)
-const AIM_WIDTH_PX = 3;            // grosor de la flecha
-const AIM_HEAD_PX = 9;             // largo de la punta
-const AIM_HEAD_HALF_WIDTH = 0.6;   // media base de la punta, como fracción de su largo
-const AIM_IDLE_ALPHA = 0.45;       // tenue mientras no se carga; opaca al cargar
 const MS_PER_S = 1000;             // `ms` del servidor -> segundos para mostrar
 // Color de un disco cuyo id aún no está en el `roster` (el roster llega en el mismo
 // tick en que entra el jugador, pero un `state` puede adelantarse): gris neutro.
 const UNKNOWN_COLOR = "#8a8f98";
-
-// ---- Texto sobre el canvas (P5d) ----
-const NAME_FONT = "600 13px system-ui, sans-serif";
-const NAME_GAP_PX = 8;             // separación entre el borde del disco y su nombre
-const NAME_OUTLINE_PX = 3;         // contorno oscuro: el nombre se lee sobre cualquier color
-const BIG_FONT = "700 72px system-ui, sans-serif";
-const MID_FONT = "700 34px system-ui, sans-serif";
-const SMALL_FONT = "500 18px system-ui, sans-serif";
-const OVERLAY_LINE_GAP_PX = 44;    // separación entre el texto grande y el pequeño
-const OVERLAY_COLOR = "#ffffff";
-const OVERLAY_SHADOW = "#000000";
-const COOLDOWN_RING_GAP_PX = 9;    // el anillo de enfriamiento va por fuera del de carga
-const COOLDOWN_COLOR = "#8a8f98";
-const MS_PER_S_FLOAT = 1000;
+const MAX_FRAME_DT_S = 0.1;        // un fotograma más largo que esto (pestaña dormida) cuenta como 0,1 s
+const COUNT_POP_MS = 260;          // duración de la animación al cambiar el número/texto central
+const WINNER_TIE_TONE = PALETTE.violet;
+const HIT_OTHERS_VOLUME = 0.6;                 // los golpes ajenos suenan más bajo que los propios
+const ELIM_OTHERS_VOLUME = 0.7;
+const DASH_OTHERS_VOLUME = 0.5;                // el whoosh de una embestida ajena, más bajo que el tuyo
+// Música por fase: la batalla solo mientras se juega; todo lo demás (vestíbulo, espera, cuenta
+// regresiva, resultado) usa la del vestíbulo. Registro como `handlers`: otra fase es otra entrada.
+const musicForPhase = { playing: "battle" };
+const RESULT_ROWS = 5;                         // posiciones que muestra la pantalla de resultado
+const RING_CIRCUMFERENCE = 2 * Math.PI * 46;   // r=46 del SVG del anillo de la cuenta regresiva
+let ringAnimation = null;
 
 // ---- Interpolación (P5c) ----
 const INTERP_DELAY_MS = 100;       // se dibuja ~100 ms en el pasado (docs/diseno.md, P5)
@@ -82,9 +71,37 @@ const els = {
   create: document.getElementById("create"),
   leave: document.getElementById("leave"),
   game: document.getElementById("game"),
+  entry: document.getElementById("entry"),
   canvas: document.getElementById("arena"),
+  overlay: document.getElementById("overlay"),
+  overlayCore: document.getElementById("overlay-core"),
+  overlayRing: document.getElementById("overlay-ring"),
+  ringFill: document.getElementById("ring-fill"),
+  result: document.getElementById("result"),
+  resultTitle: document.getElementById("result-title"),
+  resultRank: document.getElementById("result-rank"),
+  resultLeave: document.getElementById("result-leave"),
+  sound: document.getElementById("sound"),
+  board: document.getElementById("board"),
+  boardCount: document.getElementById("board-count"),
+  overlayBig: document.getElementById("overlay-big"),
+  overlaySmall: document.getElementById("overlay-small"),
+  fps: document.getElementById("fps"),
 };
-const ctx = els.canvas.getContext("2d");
+// alpha:false -> el canvas es opaco y el navegador se ahorra mezclarlo con la página.
+const ctx = els.canvas.getContext("2d", { alpha: false });
+
+// Todo lo de neon.js que vive entre fotogramas: sprites horneados, partículas, animación por disco.
+const sprites = new Sprites();
+const particles = new ParticlePool(MAX_PARTICLES);
+const beams = new EliminationBeams(BEAM_MAX);
+const fxTracker = new FxTracker();
+const perf = new URLSearchParams(location.search).has("fps") ? new PerfMeter(els.fps) : null;
+if (perf) els.fps.hidden = false;
+let arenaLayer = { key: "", canvas: null };   // capa estática pre-renderizada (se rehace solo si cambia la arena)
+let lastFrameNow = 0;
+// Si la fuente termina de cargar después de hornear los nombres, se hornean otra vez.
+document.fonts?.load(`600 12px ${FONT_STACK}`).then(() => sprites.clearLabels());
 
 // Todo el estado del cliente en un solo objeto, para no repartir variables sueltas.
 const session = {
@@ -183,12 +200,14 @@ const handlers = {
     session.room = msg.id;
     resetRoomState();
     showView();
+    syncMusic();
     setStatus(msg.id === null ? "Elige una sala o crea una." : `Estás en la sala ${msg.id}.`);
   },
   roster(msg) {
     // Siempre llega la lista completa: se reemplaza entera, no se mezcla.
     session.host = msg.host;
     session.roster = new Map(msg.players.map((p) => [p.id, { name: p.name, color: p.color }]));
+    warmSprites();
   },
   state(msg) {
     // Solo importa el más reciente: cada `state` se basta a sí mismo
@@ -202,6 +221,7 @@ const handlers = {
       // olvida el intervalo medio para que el retraso de interpolación se recalcule.
       timeline.interval = null;
       if (Object.hasOwn(phaseEntered, msg.phase)) phaseEntered[msg.phase]();
+      syncMusic();
     }
   },
   error(msg) {
@@ -233,13 +253,22 @@ function resetRoomState() {
   lastHudTick = -1;
   resetTimeline();
   resetControls();
+  fxTracker.clear();
+  particles.clear();
+  beams.clear();
+  observedPair = "";
+  hideOverlay();
+  hideResult();
   els.start.hidden = true;
   els.scores.replaceChildren();
+  els.board.hidden = true;
+  els.boardCount.textContent = "";
 }
 
 // Vestíbulo (lista de salas) o sala (partida), según dónde esté el jugador.
 function showView() {
   const connected = session.socket !== null;
+  els.entry.hidden = connected;
   els.lobby.hidden = !(connected && session.room === null);
   els.game.hidden = !(connected && session.room !== null);
 }
@@ -256,16 +285,19 @@ function renderRooms() {
   els.rooms.replaceChildren(...session.rooms.map((room) => {
     const item = document.createElement("li");
     item.className = "room";
+    const dot = document.createElement("span");   // verde: abierta; amarillo: jugando; rojo: llena
+    dot.className = `dot ${room.players >= room.max ? "full" : room.open ? "open" : "playing"}`;
+    dot.title = room.players >= room.max ? "Llena" : room.open ? "Abierta" : "Jugando";
     const title = document.createElement("span");
-    title.textContent = `${room.name} · anfitrión ${room.host}`;
+    title.textContent = `${room.name} • anfitrión ${room.host}`;
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = `${room.players}/${room.max} · ${PHASE_LABEL[room.phase] ?? room.phase}`;
+    meta.textContent = `${room.players}/${room.max} • ${PHASE_LABEL[room.phase] ?? room.phase}`;
     const join = document.createElement("button");
     join.textContent = room.players >= room.max ? "Llena" : "Unirse";
     join.disabled = !room.open;
     join.addEventListener("click", () => send({ t: "join", room: room.id }));
-    item.append(title, meta, join);
+    item.append(dot, title, meta, join);
     return item;
   }));
 }
@@ -286,6 +318,7 @@ function connect(name) {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/ws`);
   session.socket = socket;
+  syncMusic();
   showView();          // el socket ya está asignado: muestra el vestíbulo en cuanto llegue la lista
   setStatus("Conectando…");
 
@@ -298,6 +331,7 @@ function connect(name) {
     session.socket = null;
     session.room = null;
     resetRoomState();
+    syncMusic();
     showView();
     els.enter.disabled = false;
   });
@@ -369,11 +403,19 @@ function setCharging(on) {
   controls.charging = on;
   // Soltar con carga acumulada lanza la embestida y empieza el enfriamiento en el servidor:
   // el cliente lo refleja (aproximado) para que el jugador VEA por qué no puede cargar.
-  if (!on && ownCharge() >= (session.minCharge ?? 0) && ownCharge() > 0) controls.cooldownUntil = performance.now() + session.cooldownS * MS_PER_S_FLOAT;
+  if (!on && ownCharge() >= (session.minCharge ?? 0) && ownCharge() > 0) controls.cooldownUntil = performance.now() + session.cooldownS * MS_PER_S;
+  // El sonido de carga solo suena si de verdad se puede cargar: jugando y con el propio robot vivo.
+  if (!on) gameAudio.stopCharge();
+  else if (ownAlive()) gameAudio.startCharge();
   send({ t: "charge", on });
 }
 
+function ownAlive() {
+  return session.phase === "playing" && !!session.latest?.d.some((disc) => disc[0] === session.me && disc[4]);
+}
+
 function resetControls() {
+  gameAudio.stopCharge();
   controls.held.clear();
   controls.intent = { dx: 0, dy: 0 };
   controls.chargeHeld.clear();
@@ -385,6 +427,9 @@ function resetControls() {
 // El servidor crea discos NUEVOS en cada ronda (al empezar la cuenta atrás), con
 // la dirección en cero y apuntando al centro. Por eso la puntería se olvida ahí.
 function newRound() {
+  fxTracker.clear();
+  particles.clear();
+  beams.clear();
   controls.aim = null;
   controls.cooldownUntil = 0;   // los discos nuevos nacen sin enfriamiento
 }
@@ -396,9 +441,23 @@ function resyncControls() {
     send({ t: "input", ...controls.intent });
     controls.aim = controls.intent;
   }
-  if (controls.charging) send({ t: "charge", on: true });
+  if (controls.charging) {
+    send({ t: "charge", on: true });
+    gameAudio.startCharge();
+  }
 }
-const phaseEntered = { countdown: newRound, playing: resyncControls };
+
+// Fin de ronda: se corta la carga (la tecla pudo seguir pulsada) y, si ganaste, suena el jingle.
+function roundOver() {
+  gameAudio.stopCharge();
+  if (session.me !== null && session.latest?.winner === session.me) gameAudio.play("win");
+}
+const phaseEntered = { countdown: newRound, playing: resyncControls, round_over: roundOver };
+
+// Qué música debe sonar ahora: ninguna sin conexión; si no, la de la fase (o la del vestíbulo).
+function syncMusic() {
+  gameAudio.setMusic(session.socket === null ? null : (musicForPhase[session.phase] ?? "lobby"));
+}
 
 function isTyping(event) {
   return event.target instanceof HTMLInputElement;
@@ -455,8 +514,25 @@ els.start.addEventListener("click", () => {
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = els.name.value.trim();
+  gameAudio.unlock();   // enviar el nombre es un gesto del usuario: el navegador ya deja sonar
   if (name && !session.socket) connect(name);
 });
+
+// Cualquier primer clic o tecla también desbloquea el audio (por si el gesto fue otro).
+window.addEventListener("pointerdown", () => gameAudio.unlock(), { once: true });
+window.addEventListener("keydown", () => gameAudio.unlock(), { once: true });
+
+function renderSoundButton() {
+  els.sound.textContent = gameAudio.muted ? "Sonido off" : "Sonido on";
+  els.sound.setAttribute("aria-pressed", String(!gameAudio.muted));
+}
+els.sound.addEventListener("click", () => {
+  gameAudio.unlock();
+  gameAudio.setMuted(!gameAudio.muted);
+  renderSoundButton();
+  els.sound.blur();   // que Espacio no vuelva a «pulsar» el botón en plena ronda
+});
+renderSoundButton();
 
 // ---------------------------------------------------------------- pantalla
 
@@ -481,12 +557,13 @@ function describe(state) {
   const parts = [PHASE_TEXT[state.phase] ?? state.phase];
   if (state.ms !== null) parts.push(String(Math.ceil(state.ms / MS_PER_S)));
   if (state.phase === "playing" && amPlaying(state)) {
-    parts.push(performance.now() < controls.cooldownUntil ? "· embestida recargando…" : "· embestida lista");
+    parts.push(performance.now() < controls.cooldownUntil ? "• embestida recargando…" : "• embestida lista");
   }
   return parts.join(" ");
 }
 
-// Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño].
+// Qué decir en el centro de la arena según la fase: [texto grande, texto pequeño, color del brillo].
+// Es texto DOM (#overlay), no se dibuja en el canvas.
 // Registro por fase (como `handlers`): una fase nueva es una entrada nueva.
 const overlayFor = {
   // Sala de espera: la ronda no arranca sola, la inicia el anfitrión (el más antiguo de la sala)
@@ -496,17 +573,18 @@ const overlayFor = {
     const enough = count >= (session.minPlayers ?? 2);
     if (isHost()) {
       return enough
-        ? ["Sala de espera", `${count}/${session.maxPlayers} en la sala: pulsa «Iniciar partida» cuando estén todos`]
-        : ["Sala de espera", `Eres el anfitrión. Faltan jugadores (mínimo ${session.minPlayers})`];
+        ? ["Sala de espera", `${count}/${session.maxPlayers} en la sala. Pulsa “Iniciar partida” cuando estén todos`, PALETTE.violet]
+        : ["Sala de espera", `Eres el anfitrión. Faltan jugadores (mínimo ${session.minPlayers})`, PALETTE.violet];
     }
-    return ["Sala de espera", `${nameOf(session.host)} iniciará la partida (${count}/${session.maxPlayers} en la sala)`];
+    return ["Sala de espera", `${nameOf(session.host)} iniciará la partida (${count}/${session.maxPlayers} en la sala)`, PALETTE.violet];
   },
-  countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!"],
+  countdown: (state) => [String(Math.ceil(state.ms / MS_PER_S)), "¡Prepárate!", PALETTE.cyan],
   round_over: (state) => {
-    if (state.winner === null) return ["Empate", "Nadie ganó la ronda"];
+    if (state.winner === null) return ["Empate", "Nadie ganó la ronda", WINNER_TIE_TONE];
+    const tone = discColor(state.winner);   // el brillo toma el color del ganador
     return state.winner === session.me
-      ? ["¡Ganaste!", "Siguiente ronda en breve"]
-      : [`Ganó ${nameOf(state.winner)}`, "Siguiente ronda en breve"];
+      ? ["¡Ganaste!", "Siguiente ronda en breve", tone]
+      : [`Ganó ${nameOf(state.winner)}`, "Siguiente ronda en breve", tone];
   },
 };
 
@@ -541,18 +619,28 @@ function scoreRows(state) {
 let lastScoreKey = "";
 function renderScores(state) {
   const rows = scoreRows(state);
+  const top = rows.length > 0 ? rows[0].wins : 0;
+  for (const row of rows) row.leader = top > 0 && row.wins === top; // corona al que va ganando
   const key = JSON.stringify(rows);
   if (key === lastScoreKey) return;
   lastScoreKey = key;
+  els.board.hidden = rows.length === 0;
+  els.boardCount.textContent = `${rows.length}/${session.maxPlayers}`;
   els.scores.replaceChildren(...rows.map((row) => {
     const item = document.createElement("li");
     item.className = `row ${row.status}${row.me ? " me" : ""}`;
     const swatch = document.createElement("span");
     swatch.className = "swatch";
     swatch.style.background = row.color;
+    swatch.style.color = row.color;   // el CSS saca el brillo de currentColor
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = row.me ? `${row.name} (tú)` : row.name;
+    if (row.leader) {
+      const crown = document.createElement("span");
+      crown.className = "crown";
+      name.append(crown);
+    }
     const wins = document.createElement("span");
     wins.className = "wins";
     wins.textContent = String(row.wins);
@@ -564,72 +652,179 @@ function renderScores(state) {
   }));
 }
 
-// Texto con contorno oscuro: legible sobre la arena, los discos y el fondo.
-function drawText(text, x, y, font, color = OVERLAY_COLOR) {
-  ctx.font = font;
-  ctx.lineJoin = "round";
-  ctx.lineWidth = NAME_OUTLINE_PX;
-  ctx.strokeStyle = OVERLAY_SHADOW;
-  ctx.strokeText(text, x, y);
-  ctx.fillStyle = color;
-  ctx.fillText(text, x, y);
+// ---- Capa central (DOM): espera, cuenta regresiva y resultado ----
+
+let lastOverlayKey = "";
+
+function hideOverlay() {
+  lastOverlayKey = "";
+  ringAnimation?.cancel();
+  ringAnimation = null;
+  els.overlay.hidden = true;
 }
 
-function drawOverlay(state, cx, cy) {
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  if (Object.hasOwn(overlayFor, state.phase)) {
-    const [big, small] = overlayFor[state.phase](state);
-    const isNumber = /^\d+$/.test(big); // las cuentas atrás van grandes; los textos, medianos
-    drawText(big, cx, cy, isNumber ? BIG_FONT : MID_FONT);
-    drawText(small, cx, cy + OVERLAY_LINE_GAP_PX, SMALL_FONT);
+// ---- Pantalla de resultado (DOM) ----
+
+let lastResultKey = "";
+
+function hideResult() {
+  lastResultKey = "";
+  els.result.hidden = true;
+}
+
+// Título (el mismo texto que ya calcula overlayFor.round_over) + ranking por victorias + salida.
+// Los nombres los eligen otros jugadores: textContent, nunca HTML.
+function renderResult(state) {
+  const [title, , tone] = overlayFor.round_over(state);
+  const rows = scoreRows(state).slice(0, RESULT_ROWS);
+  const key = JSON.stringify([title, tone, rows.map((row) => [row.id, row.wins])]);
+  if (key === lastResultKey) return;   // llega a 10 Hz: solo se reconstruye si cambia algo
+  lastResultKey = key;
+  els.result.hidden = false;
+  els.result.style.setProperty("--tone", tone);
+  els.resultTitle.textContent = title;
+  els.resultRank.replaceChildren(...rows.map((row) => {
+    const item = document.createElement("li");
+    if (row.id === state.winner) item.className = "winner";
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = row.color;
+    swatch.style.color = row.color;
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = row.me ? `${row.name} (tú)` : row.name;
+    const wins = document.createElement("span");
+    wins.className = "wins";
+    wins.textContent = String(row.wins);
+    item.append(swatch, name, wins);
+    return item;
+  }));
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    els.result.animate([{ opacity: 0 }, { opacity: 1 }], { duration: COUNT_POP_MS });
   }
 }
 
-// Flecha de puntería del PROPIO disco: hacia dónde saldría la embestida. Sin
-// dirección pulsada apunta al centro de la arena, como el servidor al empezar.
-function drawAim(px, py, worldX, worldY, r, charging) {
-  const aim = controls.aim ?? { dx: -worldX, dy: -worldY };
-  const length = Math.hypot(aim.dx, aim.dy);
-  if (length === 0) return; // disco exactamente en el centro y sin dirección: nada que dibujar
-  const ux = aim.dx / length;
-  const uy = aim.dy / length;
-  const fromX = px + ux * r * AIM_GAP_FACTOR;
-  const fromY = py + uy * r * AIM_GAP_FACTOR;
-  const toX = px + ux * r * AIM_LENGTH_FACTOR;
-  const toY = py + uy * r * AIM_LENGTH_FACTOR;
+els.resultLeave.addEventListener("click", () => {
+  send({ t: "leave" });
+  els.resultLeave.blur();   // que Espacio no vuelva a «pulsar» el botón
+});
 
-  ctx.save();
-  ctx.globalAlpha = charging ? 1 : AIM_IDLE_ALPHA;
-  ctx.strokeStyle = "#fff";
-  ctx.fillStyle = "#fff";
-  ctx.lineWidth = AIM_WIDTH_PX;
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
-  ctx.stroke();
-  // Punta: triángulo con la base perpendicular a la dirección (-uy, ux).
-  ctx.beginPath();
-  ctx.moveTo(toX + ux * AIM_HEAD_PX, toY + uy * AIM_HEAD_PX);
-  ctx.lineTo(toX - uy * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH, toY + ux * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH);
-  ctx.lineTo(toX + uy * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH, toY - ux * AIM_HEAD_PX * AIM_HEAD_HALF_WIDTH);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
+// El anillo se vacía durante el segundo que muestra el número actual: empieza con lo que
+// queda de ese segundo (state.ms no es múltiplo exacto de 1000) y termina en cero.
+function syncCountdownRing(state) {
+  const counting = state.phase === "countdown";
+  els.overlayCore.classList.toggle("countdown", counting);
+  els.overlayRing.toggleAttribute("hidden", !counting);
+  ringAnimation?.cancel();
+  ringAnimation = null;
+  if (!counting || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const left = state.ms - (Math.ceil(state.ms / MS_PER_S) - 1) * MS_PER_S; // ms que quedan de este segundo (0..1000]
+  ringAnimation = els.ringFill.animate(
+    [{ strokeDashoffset: RING_CIRCUMFERENCE * (1 - left / MS_PER_S) }, { strokeDashoffset: RING_CIRCUMFERENCE }],
+    { duration: left, easing: "linear", fill: "forwards" },
+  );
 }
 
-// Anillo gris que se vacía mientras la embestida se recarga: sin él, soltar y volver a
-// pulsar enseguida "no hace nada" y parece que los controles fallan.
-function drawCooldown(px, py, r, now) {
-  const total = session.cooldownS * MS_PER_S_FLOAT;
-  const left = controls.cooldownUntil - now;
-  if (total <= 0 || left <= 0) return;
-  const start = -Math.PI / 2;
-  ctx.beginPath();
-  ctx.arc(px, py, r + COOLDOWN_RING_GAP_PX, start, start + (left / total) * 2 * Math.PI);
-  ctx.strokeStyle = COOLDOWN_COLOR;
-  ctx.lineWidth = CHARGE_RING_WIDTH_PX;
-  ctx.stroke();
+// Solo toca el DOM cuando el texto cambia (la cuenta atrás llega a 10 Hz, el texto cambia 1 vez por segundo).
+// Los nombres los eligen otros jugadores: textContent, nunca HTML.
+function renderOverlay(state) {
+  if (state.phase === "round_over") { // el resultado tiene su propia pantalla
+    hideOverlay();
+    return renderResult(state);
+  }
+  hideResult();
+  if (!Object.hasOwn(overlayFor, state.phase)) return hideOverlay();
+  const [big, small, tone] = overlayFor[state.phase](state);
+  const key = `${state.phase}|${big}|${small}|${tone}`;
+  if (key === lastOverlayKey) return;
+  lastOverlayKey = key;
+  els.overlay.hidden = false;
+  els.overlay.style.setProperty("--tone", tone);
+  els.overlayBig.textContent = big;
+  els.overlayBig.classList.toggle("number", /^\d+$/.test(big)); // las cuentas atrás van grandes
+  syncCountdownRing(state);
+  els.overlaySmall.textContent = small;
+  // "Golpe" de entrada: transform y opacity, que no obligan al navegador a repintar el texto.
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    els.overlayBig.animate(
+      [{ transform: "scale(1.45)", opacity: 0 }, { transform: "scale(1)", opacity: 1 }],
+      { duration: COUNT_POP_MS, easing: "cubic-bezier(.2,.9,.3,1.2)" },
+    );
+  }
+}
+
+// ---- Lo que el servidor no manda, deducido de los estados (golpes y embestidas) ----
+
+// Se observa cada PAR de estados que se está mezclando: la velocidad de un disco es su
+// desplazamiento entre los dos dividido por la diferencia de `tick`. Así no depende de
+// cuándo llegaron los paquetes (la red tiene jitter; los ticks no).
+let observedPair = "";
+function observePair(now, view) {
+  const snaps = timeline.snapshots;
+  if (snaps.length < 2) return;
+  const before = snaps[0].state;
+  const after = snaps[1].state;
+  const key = `${before.tick}-${after.tick}`;
+  if (key === observedPair) return;   // el mismo par que el fotograma anterior
+  observedPair = key;
+  const ticks = after.tick - before.tick;
+  // Solo se compara jugando: al empezar la ronda los discos "saltan" a su punto de salida.
+  if (ticks <= 0 || before.phase !== "playing" || after.phase !== "playing") return;
+
+  const previous = new Map(before.d.map((disc) => [disc[0], disc]));
+  for (const [id, x, y, charge, alive] of after.d) {
+    const old = previous.get(id);
+    const fx = fxTracker.peek(id);
+    if (!old || !fx) continue;
+    if (!old[4] || !alive) { fx.dashing = false; fx.vTick = -1; continue; }
+
+    const vx = (x - old[1]) / ticks;
+    const vy = (y - old[2]) / ticks;
+    fx.dashing = Math.hypot(vx, vy) > TRAIL_MIN_UNITS_PER_TICK;
+
+    // Soltar la carga (>= min_charge -> 0) es una embestida: chispas hacia atrás.
+    const released = old[3] > 0 && old[3] >= (session.minCharge ?? 0) && charge === 0;
+    if (released) {
+      fx.dashUntil = now + DASH_GRACE_MS;
+      gameAudio.play("whoosh", { volume: id === session.me ? 1 : DASH_OTHERS_VOLUME });
+      particles.burstDash(view.cx + old[1] * view.scale, view.cy + old[2] * view.scale, fx.heading, discColor(id), sprites);
+    } else if (fx.vTick === before.tick && now >= fx.dashUntil
+        && Math.hypot(vx - fx.vx, vy - fx.vy) > HIT_MIN_DV_UNITS_PER_TICK) {
+      fx.flashAt = now;               // cambio brusco de velocidad sin que él haya embestido: lo golpearon
+      gameAudio.play("hit", { volume: id === session.me ? 1 : HIT_OTHERS_VOLUME });
+    }
+    fx.vx = vx;
+    fx.vy = vy;
+    fx.vTick = after.tick;            // el par siguiente solo se compara con este si empieza donde éste acaba
+  }
+}
+
+// ---- Dibujo ----
+
+// Dirección de la flecha de puntería del PROPIO disco: la última pulsada o, sin ninguna,
+// hacia el centro de la arena, como el servidor al empezar.
+function aimOf(worldX, worldY) {
+  const aim = controls.aim ?? { dx: -worldX, dy: -worldY };
+  const length = Math.hypot(aim.dx, aim.dy);
+  return length === 0 ? null : { ux: aim.dx / length, uy: aim.dy / length };
+}
+
+// Píxeles por unidad del mundo: la arena cabe en el canvas dejando CANVAS_MARGIN_PX de aire.
+function pixelsPerUnit() {
+  return (els.canvas.width / 2 - CANVAS_MARGIN_PX) / session.arena.radius;
+}
+
+// Hornear un sprite (con su brillo) cuesta varios milisegundos. Hacerlo la primera vez que
+// aparece un color, ya con la ronda en marcha, provoca un tirón justo al empezar. El roster
+// llega en la sala de espera, donde no hay animación que se pueda trabar: se hornea ahí.
+function warmSprites() {
+  sprites.setDiscRadius(session.arena.disc_radius * pixelsPerUnit());
+  for (const { color } of session.roster.values()) {
+    sprites.robot(color);
+    sprites.halo(color);
+    sprites.dot(color);
+    sprites.white(color);
+  }
 }
 
 function draw(now) {
@@ -637,63 +832,75 @@ function draw(now) {
   const cx = width / 2;
   const cy = height / 2;
   const { radius, disc_radius: discRadius } = session.arena;
-  const scale = (width / 2 - CANVAS_MARGIN_PX) / radius; // px por unidad del mundo
+  const scale = pixelsPerUnit();
+  const r = discRadius * scale;
+  const dt = Math.min(MAX_FRAME_DT_S, lastFrameNow ? (now - lastFrameNow) / MS_PER_S : 0);
+  lastFrameNow = now;
 
-  ctx.clearRect(0, 0, width, height);
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius * scale, 0, 2 * Math.PI);
-  ctx.fillStyle = "#1b1e24";
-  ctx.fill();
-  ctx.strokeStyle = "#555b66";
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  // Capa estática: UNA vez (y otra si cambia el tamaño de la arena). Cada fotograma es un drawImage.
+  const layerKey = `${width}x${height}:${radius * scale}`;
+  if (arenaLayer.key !== layerKey) arenaLayer = { key: layerKey, canvas: buildArenaLayer(width, height, radius * scale) };
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(arenaLayer.canvas, 0, 0);
 
   if (!session.latest) return;
-  for (const [id, x, y, charge, alive] of interpolatedDiscs(now)) {
+  sprites.setDiscRadius(r);
+  const discs = interpolatedDiscs(now);
+  const view = { cx, cy, scale };
+  observePair(now, view);
+
+  fxTracker.nextFrame();
+  // Los eliminados van debajo y el propio encima de todos.
+  const ordered = [...discs].sort((a, b) => (a[4] - b[4]) || ((a[0] === session.me) - (b[0] === session.me)));
+  for (const [id, x, y, charge, alive] of ordered) {
     const px = cx + x * scale;
     const py = cy + y * scale;
-    const r = discRadius * scale;
+    const color = discColor(id);
+    const own = id === session.me;
+    const fx = fxTracker.get(id, now, !!alive, Math.atan2(-y, -x)); // al nacer mira al centro, como el servidor
+    const aim = own && alive ? aimOf(x, y) : null;
+    fx.track(px, py, dt, aim && charge > 0 ? Math.atan2(aim.uy, aim.ux) : null);
 
-    ctx.globalAlpha = alive ? 1 : DEAD_ALPHA;
-    ctx.beginPath();
-    ctx.arc(px, py, r, 0, 2 * Math.PI);
-    ctx.fillStyle = discColor(id);
-    ctx.fill();
-    if (id === session.me) {
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = OWN_OUTLINE_PX;
-      ctx.stroke();
+    // Eliminación: se detecta en el MOMENTO en que se ve (flanco vivo -> muerto en lo interpolado).
+    if (fx.wasAlive && !alive) {
+      fx.deadAt = now;
+      fx.dashing = false;
+      particles.burstElimination(px, py, color, sprites);
+      beams.add(px, py);
+      gameAudio.play("eliminated", { volume: own ? 1 : ELIM_OTHERS_VOLUME });
     }
-    if (id === session.me && alive) drawAim(px, py, x, y, r, charge > 0);
-    if (id === session.me && alive) drawCooldown(px, py, r, now);
-    if (charge > 0) { // anillo que se completa cuando la carga llega a 1.0
-      const start = -Math.PI / 2;
-      ctx.beginPath();
-      ctx.arc(px, py, r + CHARGE_RING_GAP_PX, start, start + charge * 2 * Math.PI);
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = CHARGE_RING_WIDTH_PX;
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    drawText(nameOf(id), px, py - r - NAME_GAP_PX - (charge > 0 ? CHARGE_RING_GAP_PX + CHARGE_RING_WIDTH_PX : 0), NAME_FONT);
+    fx.wasAlive = !!alive;
+
+    const cooldownLeft = own && session.cooldownS > 0 ? (controls.cooldownUntil - now) / (session.cooldownS * MS_PER_S) : 0;
+    paintDisc(ctx, sprites, fx, {
+      px, py, r, color, charge, alive: !!alive, own,
+      aim, cooldown: Math.max(0, cooldownLeft), name: nameOf(id),
+    }, now);
   }
-  drawOverlay(session.latest, cx, cy);
+  fxTracker.prune(discs.length);
+
+  particles.update(dt);
+  beams.update(dt);
+  beams.draw(ctx, sprites);
+  particles.draw(ctx);
 }
 
 // Se dibuja al ritmo de la pantalla, no al de los mensajes. El texto (DOM) solo
 // se reescribe cuando llega un tick nuevo: tocar el DOM 60 veces por segundo sobra.
 let lastHudTick = -1;
 function frame(now) { // `now`: la hora del fotograma, en el mismo reloj que performance.now()
+  const started = performance.now();
   draw(now);
   const state = session.latest;
   if (state && state.tick !== lastHudTick) {
     lastHudTick = state.tick;
     els.hud.textContent = describe(state);
     renderScores(state);
+    renderOverlay(state);
     syncStartButton(state);
   }
+  if (perf) perf.frame(now, performance.now() - started);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

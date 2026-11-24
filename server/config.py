@@ -247,13 +247,16 @@ class Config:
     # (2 x 0,6 x 300 x sen(22,5°)), casi el triple del diámetro.
     SPAWN_RING_FRACTION: float = 0.6
 
-    # Colores de los discos: 12, elegidos para distinguirse sobre fondo oscuro. El
-    # color sale de `id % 12` (ver world.color_for): es el mismo en el vestíbulo y
-    # en cualquier sala, pero dos jugadores cuyos ids difieran en múltiplo de 12
-    # comparten color (límite conocido; el nombre sobre el disco los distingue).
+    # Colores de los jugadores: 8 (uno por plaza de sala), neón sobre el fondo
+    # #090D1B. Se eligieron repartidos por el círculo cromático (tonos ~187°, 220°,
+    # 265°, 322°, 355°, 30°, 59° y 115°) y todos saturados y claros, para que se
+    # distingan entre sí y brillen sobre la arena oscura. El color sale de `id % 8`
+    # (ver world.color_for): es el mismo en el vestíbulo y en cualquier sala, pero
+    # dos jugadores cuyos ids difieran en múltiplo de 8 comparten color (límite
+    # conocido; el nombre sobre el robot los distingue).
     PLAYER_COLORS: tuple[str, ...] = (
-        "#e4572e", "#29b6f6", "#ffc914", "#76b041", "#c060a1", "#17bebb",
-        "#ff8c42", "#8e7dbe", "#f25f5c", "#2ec4b6", "#d4e157", "#f7a1c4",
+        "#00e5ff", "#4d7cff", "#a15cff", "#ff3cac",
+        "#ff3b4e", "#ff9a1f", "#f9f871", "#5cff4a",
     )
 
     # ------------------------------------------------------------------

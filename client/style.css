@@ -1,0 +1,371 @@
+/*
+ * Estilo neón de StreetPunch para las pantallas HTML (entrada, vestíbulo, sala, cuenta
+ * regresiva y resultado). Paleta: fondo #090D1B, arena #151E38, acentos cian #00E5FF,
+ * rosa #FF3CAC, violeta #8B5CF6, amarillo #F9F871, texto #F4F7FF.
+ *
+ * Los brillos de aquí son box-shadow / text-shadow estáticos sobre elementos DOM que casi
+ * no se repintan: el navegador los cachea en su capa. Solo se animan transform y opacity
+ * (las dos propiedades que no obligan a repintar). El canvas, en cambio, nunca usa sombras
+ * por fotograma (ver neon.js).
+ */
+
+@font-face {
+  font-family: "Orbitron";
+  src: url("/orbitron.woff2") format("woff2");
+  font-weight: 400 900;       /* fuente variable: un solo archivo para todos los grosores */
+  font-style: normal;
+  font-display: swap;         /* hasta que llegue se ve el respaldo, sin texto invisible */
+}
+
+:root {
+  --bg: #090D1B;
+  --arena: #151E38;
+  --cyan: #00E5FF;
+  --pink: #FF3CAC;
+  --violet: #8B5CF6;
+  --yellow: #F9F871;
+  --text: #F4F7FF;
+  --dim: #8f9bc4;
+  --font: Orbitron, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  font: 15px/1.5 var(--font);
+  background:
+    radial-gradient(1100px 560px at 50% -12%, rgba(139, 92, 246, 0.22), transparent 62%),
+    radial-gradient(900px 520px at 100% 100%, rgba(0, 229, 255, 0.12), transparent 60%),
+    radial-gradient(700px 420px at 0% 90%, rgba(255, 60, 172, 0.10), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* Rejilla de fondo, fija y tenue: da profundidad sin costar nada al desplazarse. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(180deg, transparent, #000 40%, transparent);
+}
+
+main { position: relative; max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+
+/* Logo inclinado (Orbitron no tiene cursiva: se inclina con skew), con degradado y corona encima. */
+.logo {
+  margin: 4px 0 4px;
+  text-align: center;
+  font-weight: 900;
+  font-size: clamp(1.7rem, 7vw, 2.6rem);
+  letter-spacing: 0.14em;
+  line-height: 1.1;
+  transform: skewX(-10deg);
+}
+.logo .crown {
+  display: block;
+  width: 36px;
+  height: 25px;
+  margin: 0 auto -2px;
+  fill: var(--yellow);
+  filter: drop-shadow(0 0 6px rgba(249, 248, 113, 0.85)) drop-shadow(0 0 16px rgba(249, 248, 113, 0.45));
+}
+.logo .street, .logo .punch {
+  display: inline-block;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+/* Los brillos van con drop-shadow (el texto es transparente: text-shadow se vería detrás del degradado). */
+.logo .street {
+  background-image: linear-gradient(180deg, #ffffff 0%, var(--cyan) 100%);
+  filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.75));
+}
+.logo .punch {
+  background-image: linear-gradient(180deg, #ffa6dc 0%, var(--pink) 55%, var(--violet) 100%);
+  filter: drop-shadow(0 0 10px rgba(255, 60, 172, 0.8));
+  animation: flicker 7s infinite;
+}
+@keyframes flicker {
+  0%, 92%, 96%, 100% { opacity: 1; }
+  93% { opacity: 0.55; }
+  94% { opacity: 1; }
+  95% { opacity: 0.7; }
+}
+
+.status {
+  margin: 0 0 14px;
+  min-height: 1.5em;
+  text-align: center;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+h2 { margin: 0 0 12px; font-size: 1rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); }
+
+/* ---- Tarjetas (entrada y vestíbulo) ---- */
+.panel {
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  background: linear-gradient(180deg, rgba(21, 30, 56, 0.88), rgba(13, 20, 42, 0.88));
+  box-shadow: 0 0 28px rgba(0, 229, 255, 0.12), inset 0 0 26px rgba(0, 229, 255, 0.05);
+}
+[hidden] { display: none !important; }
+
+/* ---- Controles ---- */
+form { display: flex; gap: 10px; }
+input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 14px;
+  font: 600 0.95rem var(--font);
+  color: var(--text);
+  background: #0c1329;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input::placeholder { color: #55618c; }
+input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.2), 0 0 18px rgba(0, 229, 255, 0.4); }
+
+button {
+  padding: 10px 18px;
+  font: 700 0.78rem var(--font);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  background: rgba(0, 229, 255, 0.06);
+  border: 1.5px solid var(--cyan);
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.35), inset 0 0 10px rgba(0, 229, 255, 0.12);
+  transition: transform 0.12s, background 0.15s, box-shadow 0.15s;
+}
+button:hover:not(:disabled) { background: rgba(0, 229, 255, 0.16); box-shadow: 0 0 20px rgba(0, 229, 255, 0.6), inset 0 0 12px rgba(0, 229, 255, 0.2); }
+button:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
+button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+button.primary { background: var(--cyan); color: var(--bg); }
+button.primary:hover:not(:disabled) { background: #5cf0ff; }
+button:disabled { color: #5a6488; border-color: #333d62; background: rgba(51, 61, 98, 0.15); box-shadow: none; cursor: default; }
+
+#start { color: var(--yellow); border-color: var(--yellow); background: rgba(249, 248, 113, 0.07); box-shadow: 0 0 12px rgba(249, 248, 113, 0.35), inset 0 0 10px rgba(249, 248, 113, 0.12); }
+#start:hover:not(:disabled) { background: rgba(249, 248, 113, 0.18); box-shadow: 0 0 22px rgba(249, 248, 113, 0.6), inset 0 0 12px rgba(249, 248, 113, 0.2); }
+#leave { color: var(--pink); border-color: var(--pink); background: rgba(255, 60, 172, 0.07); box-shadow: 0 0 12px rgba(255, 60, 172, 0.35), inset 0 0 10px rgba(255, 60, 172, 0.12); }
+#leave:hover:not(:disabled) { background: rgba(255, 60, 172, 0.18); box-shadow: 0 0 22px rgba(255, 60, 172, 0.6), inset 0 0 12px rgba(255, 60, 172, 0.2); }
+
+/* Botón de sonido: siempre a mano, arriba a la derecha de la página. */
+#sound {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  padding: 6px 12px;
+  font-size: 0.62rem;
+  color: var(--yellow);
+  border-color: rgba(249, 248, 113, 0.7);
+  background: rgba(9, 13, 27, 0.8);
+  box-shadow: 0 0 10px rgba(249, 248, 113, 0.25);
+}
+#sound[aria-pressed="false"] { color: var(--dim); border-color: #333d62; box-shadow: none; }
+
+/* ---- Vestíbulo ---- */
+#lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+#lobby-head h2 { margin: 0; }
+#rooms { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+#rooms .room {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-left: 3px solid var(--violet);
+  background: rgba(12, 19, 41, 0.8);
+}
+#rooms .dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor, 0 0 16px currentColor; }
+#rooms .dot.open { color: #5cff4a; }
+#rooms .dot.playing { color: var(--yellow); }
+#rooms .dot.full { color: #ff3b4e; }
+#rooms .room .meta { color: var(--dim); font-size: 0.74rem; letter-spacing: 0.05em; }
+#rooms .room button { padding: 7px 14px; }
+#rooms .empty { color: var(--dim); padding: 10px 0; text-align: center; font-size: 0.82rem; }
+
+/* ---- Sala ---- */
+#bar { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+#stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 36px rgba(0, 229, 255, 0.18);
+  background: var(--bg);
+}
+canvas { display: block; width: 100%; height: auto; }
+
+/* Capa de espera / cuenta regresiva / resultado. Solo se anima transform/opacity (vía JS). */
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  pointer-events: none;
+  --tone: var(--cyan);
+}
+#overlay-core { position: relative; display: grid; place-items: center; }
+#overlay-core.countdown { width: clamp(9rem, 40vw, 15rem); aspect-ratio: 1; }
+#overlay-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);                 /* el anillo empieza arriba */
+  filter: drop-shadow(0 0 6px var(--tone));  /* brillo estático: solo dura los 3 s de la cuenta */
+}
+#overlay-ring .track { fill: none; stroke: rgba(255, 255, 255, 0.12); stroke-width: 3.5; }
+#overlay-ring .fill { fill: none; stroke: var(--tone); stroke-width: 3.5; stroke-linecap: round; stroke-dasharray: 289.03; stroke-dashoffset: 0; }
+#overlay-big {
+  font-weight: 900;
+  font-size: clamp(1.5rem, 6.5vw, 2.5rem);
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-shadow: 0 0 8px var(--tone), 0 0 26px var(--tone), 0 0 52px var(--tone);
+}
+#overlay-big.number { font-size: clamp(4.5rem, 24vw, 8.5rem); letter-spacing: 0; }
+#overlay-small {
+  max-width: 28em;
+  padding: 6px 14px;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  background: rgba(9, 13, 27, 0.68);
+  border: 1px solid var(--tone);
+  border-radius: 999px;
+}
+#overlay-small:empty { display: none; }
+
+/* Resultado de la ronda: oscurece la arena y muestra copa + ranking. El fondo no recibe clics; el botón sí. */
+#result {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 42%, rgba(9, 13, 27, 0.62), rgba(9, 13, 27, 0.9));
+  pointer-events: none;
+  --tone: var(--yellow);
+}
+#trophy { width: clamp(64px, 18vw, 96px); filter: drop-shadow(0 0 10px rgba(249, 248, 113, 0.65)) drop-shadow(0 0 26px rgba(255, 154, 31, 0.45)); }
+#result-title {
+  font-weight: 900;
+  font-size: clamp(1.3rem, 5.5vw, 2.1rem);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px var(--tone), 0 0 26px var(--tone);
+}
+#result-rank { list-style: none; margin: 0; padding: 0; width: min(300px, 82%); display: grid; gap: 4px; counter-reset: pos; }
+#result-rank li {
+  display: grid;
+  grid-template-columns: 1.6em 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: rgba(12, 19, 41, 0.85);
+  font-size: 0.74rem;
+  text-align: left;
+}
+#result-rank li::before { counter-increment: pos; content: counter(pos); color: var(--dim); font-weight: 800; }
+#result-rank li.winner { border-color: var(--tone); box-shadow: 0 0 14px var(--tone); }
+#result-rank li.winner::before { color: var(--yellow); }
+#result-rank .swatch { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 6px currentColor, 0 0 12px currentColor; }
+#result-rank .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#result-rank .wins { font-weight: 900; color: var(--yellow); }
+#result-leave { pointer-events: auto; margin-top: 4px; }
+
+#fps {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  font: 600 0.68rem var(--font);
+  color: var(--yellow);
+  background: rgba(9, 13, 27, 0.8);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+#hud { margin: 14px 0 8px; min-height: 1.4em; text-align: center; font-size: 0.86rem; font-weight: 700; letter-spacing: 0.08em; color: var(--cyan); text-shadow: 0 0 12px rgba(0, 229, 255, 0.55); }
+
+/* Marcador: tarjeta compacta sobre el canvas, arriba a la derecha. */
+#board {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 172px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  background: rgba(9, 13, 27, 0.74);
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.14);
+  pointer-events: none;
+}
+#board-count { margin: 0 0 6px; text-align: right; font-size: 0.74rem; font-weight: 800; letter-spacing: 0.1em; color: var(--cyan); }
+#scores { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; counter-reset: rank; }
+#scores .row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 7px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  font-size: 0.68rem;
+}
+#scores .row.me { border-color: rgba(0, 229, 255, 0.7); background: rgba(0, 229, 255, 0.08); }
+#scores .row.eliminated { opacity: 0.42; }
+#scores .swatch { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 6px currentColor, 0 0 12px currentColor; }
+#scores .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#scores .name::before { counter-increment: rank; content: counter(rank) ". "; color: var(--dim); font-weight: 400; }  /* posición, sin JS */
+#scores .crown { display: inline-block; width: 12px; height: 9px; margin-left: 6px; background: var(--yellow); filter: drop-shadow(0 0 4px var(--yellow));
+                 clip-path: polygon(0 100%, 0 22%, 25% 55%, 50% 0, 75% 55%, 100% 22%, 100% 100%); }
+#scores .wins { font-weight: 900; color: var(--yellow); text-shadow: 0 0 8px rgba(249, 248, 113, 0.6); }
+#scores .status { display: none; }   /* en el marcador compacto el estado se ve por la opacidad */
+
+#help { margin: 8px 0 0; color: var(--dim); font-size: 0.72rem; line-height: 1.7; }
+
+@media (max-width: 560px) {
+  /* Pantalla estrecha: el marcador taparía media arena; pasa debajo del canvas, dentro del mismo marco. */
+  #board { position: static; width: auto; border-radius: 0; border-width: 1px 0 0; box-shadow: none; }
+  #scores { grid-template-columns: 1fr 1fr; }
+  #scores .row { font-size: 0.72rem; }
+  #rooms .room { grid-template-columns: auto 1fr auto; }
+  #rooms .room .meta { grid-column: 2; grid-row: 2; }
+  #rooms .room button { grid-column: 3; grid-row: 1 / span 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo .punch { animation: none; }
+  * { transition: none !important; }
+}

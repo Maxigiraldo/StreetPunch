@@ -1,0 +1,20 @@
+Audio del cliente (carpeta client/). Archivos descargados por Max.
+
+Origen: Pixabay (confirmado por Max). Max comprobó además que ninguna de las pistas está protegida
+por Content ID. Pixabay las publica bajo su propia licencia de contenido; el texto vigente está en
+https://pixabay.com/service/license-summary/ . Dos cosas que conviene tener presentes: la licencia
+no exige atribución (aquí se anota por orden, no por obligación) y NO permite redistribuir los
+archivos por sí solos (p. ej. como un paquete de sonidos): dentro del juego está bien.
+
+music-lobby.mp3      <- kaden_cook-videogame-queue-music-274211.mp3   (vestíbulo, sala de espera, cuenta regresiva)
+music-battle.mp3     <- bluelike_u-0-top-battle-game-bgm-264625.mp3   (mientras se juega)
+sfx-hit.mp3          <- u_nwdx76su56-impacto-flesh-448972.mp3         (golpe entre robots)
+sfx-eliminated.mp3   <- universfield-impact-thud-291047.mp3           (eliminación)
+sfx-charge.mp3       <- yarzur_ofc-sfx31-charge-534309.mp3            (cargar la embestida)
+sfx-win.mp3          <- universfield-game-bonus-03-487857.mp3         (ganar la ronda)
+sfx-whoosh.mp3       <- dragon-studio-quick-swipe-405450.mp3          (soltar la carga: la embestida)
+
+No usado: softvibes.mp3 (sin autor ni licencia conocidos).
+
+Las rutas que usa el juego están en client/audio.js (MUSIC_TRACKS y SFX_TRACKS): cambiar de pista es
+cambiar una entrada de ahí. Fuente de texto: Orbitron, ver OFL.txt.
