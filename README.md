@@ -55,8 +55,6 @@ cada cliente).
 
 ## Documentación
 
-### Del proyecto (`docs/`)
-
 | Archivo | Contenido |
 | --- | --- |
 | [`docs/diseno.md`](docs/diseno.md) | Diseño (fuente de verdad), requisitos y plan |
@@ -66,15 +64,6 @@ cada cliente).
 | [`docs/guia-del-codigo.md`](docs/guia-del-codigo.md) | **Recorrido de todo el código**: flujos de ejecución, cada clase y método, dónde está lo importante, límites honestos |
 | [`docs/bitacora-ia.md`](docs/bitacora-ia.md) | Errores reales de la IA, con antes y después |
 | [`docs/demo-race-bug.md`](docs/demo-race-bug.md) | La versión MALA a propósito: rama `demo/race-bug` (etiqueta `demo-race-bug-v2`); está en el remoto: `git checkout demo/race-bug` |
-
-### Preparación de la sustentación (`docs/sustentacion/`)
-
-Material de apoyo para defender el proyecto en vivo; no describe el sistema.
-
-| Archivo | Contenido |
-| --- | --- |
-| [`docs/sustentacion/guia-de-sustentacion.md`](docs/sustentacion/guia-de-sustentacion.md) | Orden de la demo en vivo y respuestas cortas a las preguntas probables |
-| [`docs/sustentacion/conceptos-y-estudio.md`](docs/sustentacion/conceptos-y-estudio.md) | Anexo de estudio: los conceptos que hay que dominar (redes, WebSocket, asyncio, patrones...), qué buscar, experimentos, autoevaluación |
 
 ## Estructura
 
