@@ -1,8 +1,8 @@
-# Guion de la demo y de la defensa (P12)
+# Guía de la sustentación en vivo
 
-Duración objetivo: **10 a 12 min** de demo + preguntas. Todos los comandos se
-ensayaron contra el servidor real; los números entre paréntesis son los que
-salieron en el ensayo (en otro equipo variarán un poco).
+Orden sugerido para mostrar el proyecto **en vivo, en `localhost`**, y respuestas cortas a las
+preguntas probables. Todo se explica y se ejecuta en el momento. Los números entre
+paréntesis son los que salieron al medir (en otro equipo variarán un poco).
 
 Terminales sugeridas: **T1** servidor, **T2** monitor, **T3** herramientas, más el navegador.
 
@@ -10,13 +10,11 @@ Terminales sugeridas: **T1** servidor, **T2** monitor, **T3** herramientas, más
 
 - [ ] Nada escuchando en 8080: `ss -tlnp | grep 8080` no debe mostrar nada.
 - [ ] `cd` al repo, `.venv` creado, rama `main` limpia (`git status`).
-- [ ] `.venv/bin/python -m pytest -q` en verde (229 pruebas, ~22 s). Si algo falla, **no sigas**: arréglalo antes.
+- [ ] `.venv/bin/python -m pytest -q` en verde (~22 s). Si algo falla, **no sigas**: arréglalo antes.
 - [ ] Navegador con una pestaña en `http://localhost:8080` (se usa en el paso 2).
-- [ ] OBS grabando. Un respaldo en video del paso 5 (es el más largo).
-- [ ] Plan A = todo en `localhost`; no dependes de internet.
+- [ ] Todo corre en `localhost`; no depende de internet.
 
-## 1. Arrancar el servidor y mirar el socket (1 min)
-
+## 1. Arrancar el servidor y mirar el socket
 ```bash
 # T1
 .venv/bin/python -m server.main
@@ -31,8 +29,7 @@ Salida esperada: `LISTEN 0 128 127.0.0.1:8080 ... users:(("python",pid=...,fd=3)
 - En `ss` de un socket en LISTEN, **Send-Q = backlog** (128, la cola de aceptación que pedí) y **Recv-Q = cuántas conexiones ya completaron el saludo y esperan `accept()`** (0 ahora).
 - `fd=3`: los descriptores 0, 1 y 2 son stdin/stdout/stderr; el socket de escucha es el primero libre.
 
-## 2. Salas: pestañas del navegador + bots (2 min)
-
+## 2. Salas: pestañas del navegador + bots
 ```bash
 # T2
 .venv/bin/python tools/monitor.py
@@ -52,8 +49,7 @@ Salida esperada: `LISTEN 0 128 127.0.0.1:8080 ... users:(("python",pid=...,fd=3)
 **Qué decir:** cada sala es una partida independiente (su propio `World` y su propia fase) y **un solo tick las avanza todas**: sigue habiendo un único escritor. Una sala llena (8) o jugando no deja entrar: ya no hay cola ni espectadores, y todos juegan cada ronda. Con 100 bots hay ~13 salas jugando a la vez y el tick sigue en p99 ≈ 2 ms.
 **Para que los bots se unan a TU sala:** crea la sala en el navegador, mira su número y lanza `bots.py --count 7 --room N`.
 
-## 3. Cliente lento: no frena a nadie (2 min)
-
+## 3. Cliente lento: no frena a nadie
 Un zombi solo llena el búfer si **está dentro de una sala que juega** (en el vestíbulo o en la sala de espera casi no recibe datos). Orden:
 
 1. Con el servidor **limpio** (reinícialo), en el navegador **crea una sala** (eres el anfitrión) y anota su número.
@@ -68,8 +64,7 @@ Un zombi solo llena el búfer si **está dentro de una sala que juega** (en el v
 **Resultado medido** (`tools/race_demo.py`, 60 s, 2 jugadores + 1 zombi vivo en la misma sala): los demás siguieron a **~30 estados/s todo el tiempo**; el servidor contó `mailbox_overwrites = 299` y cortó al zombi (`write_timeouts = 1`) a los 10 s.
 **Qué decir:** el buzón es de **tamaño 1**: si el cliente no lee, el tick le pisa el estado viejo y sigue. `drain()` solo detiene la tarea `writer` de *ese* cliente. A los 10 s (`WRITE_TIMEOUT_S`) se le aborta con RST (`abort_with_reset`, `server/adapters/net_util.py`) porque `transport.abort()` mandaría un FIN que nunca sale con la ventana en cero y el socket quedaría en `FIN-WAIT-1`. El búfer de envío del kernel se limitó a 64 KB (`SEND_BUFFER_BYTES`): el valor por defecto (~2,6 MB por conexión) tardaba más de 10 minutos en notar al zombi.
 
-## 4. Churn y descriptores: nada se fuga (2 min)
-
+## 4. Churn y descriptores: nada se fuga
 ```bash
 # T3
 .venv/bin/python tools/churn.py --workers 20 --seconds 30
@@ -80,8 +75,7 @@ Un zombi solo llena el búfer si **está dentro de una sala que juega** (en el v
 **Qué mostrar:** `fd` vuelve a su valor base (7), `ESTAB` baja a 0 y `CLOSE_WAIT` queda en **0**. `churn.py` abre y cierra de todas las formas: limpia, brusca (RST), sin `hello`, JSON basura, trama sin máscara, HTTP, y **crear y abandonar salas** (también cerrando de golpe dentro de una sala). Medido: **10 443 conexiones en 15 s** sin ninguna fuga.
 **Qué decir:** cada conexión libera su socket y su cupo del semáforo en un `finally` (`server/adapters/listener.py`), sea cual sea el camino de salida. `CLOSE_WAIT` acumulado sería la firma de una fuga: el cliente cerró y el servidor no.
 
-## 5. El código MALO contra el bueno (2 min)
-
+## 5. El código MALO contra el bueno
 El mismo escenario, sobre la rama que rompe tres reglas a propósito (`docs/demo-race-bug.md`):
 
 ```bash
@@ -101,8 +95,7 @@ git checkout main
 **Resultado medido (2 corridas):** bueno 30 Hz y 0 errores. Malo: **0 estados/s durante ~9 s**, **221** `fallo dentro del tick` y **1** `RuntimeError: dictionary changed size during iteration` por corrida (el error de diccionario es probabilístico; la congelación sí es fiable).
 **Qué decir:** el error clásico es `await writer.drain()` por cliente dentro del recorrido de difusión: un cliente que no lee congela a todos (head-of-line blocking), y como `await` cede el control, otra tarea borra del diccionario que el `for` está recorriendo. Con `asyncio` no hacen falta hilos para tener una condición de carrera: basta un `await` entre leer y modificar. Mi regla es **único escritor**: nadie toca el mundo salvo el tick; entrar y salir son comandos.
 
-## 6. `ulimit -n 64`: EMFILE (1 min)
-
+## 6. `ulimit -n 64`: EMFILE
 ```bash
 # T1 (reinicia el servidor con un tope de 64 descriptores)
 ( ulimit -n 64; .venv/bin/python -m server.main )
@@ -113,8 +106,7 @@ git checkout main
 **Resultado medido:** el proceso llegó a **64 descriptores** y el servidor **siguió vivo**; de 100 bots conectaron **57** (los demás no pudieron: no había descriptores; los bots crearon 8 salas) y nadie recibió un error de servidor. En el log salió `OSError: [Errno 24] Too many open files` y líneas como `(+2942 iguales suprimidos)` y `(+8319 iguales suprimidos)`: **11 261 líneas** que no llegaron al disco. **Al soltar las conexiones, los descriptores volvieron a 7 y las salas a 0** (medido).
 **Qué decir:** cuando `accept()` falla por EMFILE, `asyncio` ya reintenta cada 1 s en vez de morir, pero escribe un traceback por intento: miles. Como `logging` es **síncrono**, eso puede frenar el tick; por eso `RateLimitFilter` (`server/log_filters.py`) deja pasar una línea cada 5 s y cuenta las suprimidas. Es el riesgo conocido de que `logging` no sea asíncrono (un `QueueHandler` con hilo aparte sería la mitigación completa, no está hecha). 
 
-## 7. `kill -TERM` y reinicio inmediato (1 min)
-
+## 7. `kill -TERM` y reinicio inmediato
 ```bash
 # T1: servidor corriendo con bots conectados (tools/bots.py --count 20 --duration 60)
 kill -TERM $(ss -ltnpH 'sport = :8080' | grep -o 'pid=[0-9]*' | cut -d= -f2)
@@ -125,8 +117,7 @@ ss -tan | grep :8080 | awk '{print $1}' | sort | uniq -c
 **Resultado medido:** el servidor termina en **23 ms**; los 20 bots reciben `close 1001` (going away); quedan ~40 sockets en `TIME-WAIT`; el reinicio inmediato arranca **sin** `Address already in use`.
 **Qué decir:** el manejador de señal solo marca un `Event` (no puede hacer `await`); la corrutina principal manda close 1001 a cada cliente, da un plazo (`SHUTDOWN_GRACE_S`) y aborta a los rezagados. `TIME-WAIT` lo guarda el lado que cierra primero (aquí el servidor) 2×MSL ≈ 60 s para no confundir paquetes viejos con una conexión nueva; **`SO_REUSEADDR` permite hacer `bind` aunque haya sockets en `TIME-WAIT`**, por eso el reinicio funciona.
 
-## 8. Cierre (30 s)
-
+## 8. Cierre
 Mostrar `docs/modelo-concurrencia.md` (tabla: asyncio 26 % de CPU frente a 165 % de hilos a 300 clientes; y el servidor real: 100 jugadores en 13 salas, tick p99 ≈ 2 ms) y `docs/arquitectura.md` (UML). Frase: "el estilo es hexagonal con único escritor; el modelo, asyncio, porque la carga es E/S de conexiones largas con difusión, y lo medí".
 
 ---

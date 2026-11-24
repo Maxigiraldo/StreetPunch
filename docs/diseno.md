@@ -15,7 +15,7 @@ El proyecto es un servidor concurrente de juego multijugador en tiempo real llam
 - Lenguaje: Python, solo librería estándar, sin framework. Django o Spring Boot esconden justo el socket, el stream de bytes y el modelo de concurrencia que califica la rúbrica.
 - Transporte: WebSocket implementado por nosotros sobre un socket TCP creado a mano. El navegador no puede abrir TCP crudo; WebSocket va sobre `SOCK_STREAM`. El transporte vive en un módulo aparte.
 - Entorno: Linux en WSL2, para tener `epoll`, SIGTERM y `/proc` reales.
-- Plan A (se califica): demo simulada en `localhost`, compartiendo pantalla, con bots, pestañas del navegador y un video de respaldo grabado. No depende de internet ni de nadie más.
+- Plan A (se califica): demo simulada en `localhost`, en vivo, con bots y pestañas del navegador. No depende de internet ni de nadie más.
 - Plan B (extra): después de la parte evaluada, el salón juega por internet. Despliegue en Railway, con túnel `cloudflared` como respaldo.
 - La IA es par programador: explica cada concepto con archivo y línea, y cada error que se le encuentra va a la bitácora.
 
@@ -93,7 +93,6 @@ Hay 17 requisitos funcionales y 14 no funcionales; **[N]** es el núcleo que se 
 | Agente de código | Claude Code, con `AGENTS.md` / `CLAUDE.md` | Que explique en vez de solo generar |
 | Diagramas | Mermaid en el repositorio | GitHub lo muestra y se actualiza con el código |
 | Plan B | Railway y `cloudflared` | Juego con el salón |
-| Respaldo | OBS | Video de la demo |
 
 ### Valores configurables
 
@@ -300,7 +299,7 @@ Son 13 pasos entre el sábado 21 y el martes 24; el miércoles 25 solo se entreg
 
 - [ ] **P10. Documentos.** Justificación del modelo con los números medidos (hilo por cliente, pool, multiproceso, `asyncio`), protocolo final, diagramas actualizados al código real y README.
 - [ ] **P11. Bitácora.** Mínimo 5 errores reales con antes, después y explicación, priorizando concurrencia y sockets.
-- [ ] **P12. Ensayo y video.** Guion: arrancar (`ss -tlnp`), pestañas y bots, cliente lento, `churn.py` malo contra bueno, descriptores, `ulimit -n 64`, `kill -TERM` y reinicio inmediato. Preguntas: colas SYN y de aceptación, backlog y `somaxconn`, `epoll` bajo `asyncio`, GIL, lecturas parciales, `TIME_WAIT` y `SO_REUSEADDR`, física en otro hilo. Grabar con OBS.
+- [ ] **P12. Ensayo de la sustentación.** Orden de la demo: arrancar (`ss -tlnp`), pestañas y bots, cliente lento, `churn.py` malo contra bueno, descriptores, `ulimit -n 64`, `kill -TERM` y reinicio inmediato. Preguntas: colas SYN y de aceptación, backlog y `somaxconn`, `epoll` bajo `asyncio`, GIL, lecturas parciales, `TIME_WAIT` y `SO_REUSEADDR`, física en otro hilo.
 
 ### Miércoles 25
 

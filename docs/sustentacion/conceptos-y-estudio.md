@@ -1,6 +1,6 @@
 # Anexo: los conceptos que necesitas dominar (y qué estudiar)
 
-Anexo de [`docs/guia-del-codigo.md`](guia-del-codigo.md). La guía explica **qué hace el código**; este anexo explica
+Anexo de [`docs/guia-del-codigo.md`](../guia-del-codigo.md). La guía explica **qué hace el código**; este anexo explica
 **el conocimiento que hay detrás** para que puedas defender *por qué* está hecho así.
 
 Para cada concepto: **qué es**, **dónde aparece en tu proyecto** (`archivo:línea`, generado leyendo el código real),
@@ -357,7 +357,7 @@ en 35 s. El proyecto lo mitiga con `RateLimitFilter.filter` (`server/log_filters
 
 | Herramienta | Para qué | Ejemplo en el proyecto |
 | --- | --- | --- |
-| `ss -tlnp` | Sockets en escucha y qué proceso los tiene | Paso 1 del guion de la demo |
+| `ss -tlnp` | Sockets en escucha y qué proceso los tiene | Paso 1 de la guía de sustentación |
 | `ss -ltn` | `Recv-Q` y `Send-Q` de un socket en `LISTEN` (cola de aceptación) | Explicar el backlog |
 | `ss -tan` | Estados TCP de todas las conexiones (`TIME-WAIT`, `CLOSE-WAIT`, `FIN-WAIT-1`) | Verificar que no hay fugas |
 | `ls /proc/<pid>/fd` | Descriptores abiertos de un proceso | `tools/leakcheck.py`, `tools/fd_watch.sh` |
@@ -610,7 +610,7 @@ Leer no basta: **rómpelo y míralo**. Casi todos usan herramientas que ya está
 4. **`TIME_WAIT` y `SO_REUSEADDR`.** Con bots conectados (`.venv/bin/python tools/bots.py --count 20 --duration 60`) haz `kill -TERM` al servidor y mira `ss -tan | grep TIME-WAIT`. Reinicia **de inmediato**: arranca. Ahora comenta la línea de `SO_REUSEADDR` en `create_listen_socket` (`server/adapters/listener.py:25`) (en una rama) y repite: debería salir `Address already in use` (es lo que predice la teoría; no lo probé yo).
 5. **Descriptores y fugas.** `ls /proc/$(ss -ltnpH 'sport = :8080' | grep -o 'pid=[0-9]*' | cut -d= -f2)/fd | wc -l` antes y después de `tools/churn.py --workers 20 --seconds 15`. Debe volver al valor base.
 6. **EMFILE.** Arranca el servidor con `( ulimit -n 64; .venv/bin/python -m server.main )` y lanza 100 bots. Observa que sobrevive y que el log trae `(+N iguales suprimidos)`.
-7. **Backpressure y cliente lento.** Sigue el paso 3 de `docs/guion-demo.md` (`tools/slow_client.py --keepalive --room N`) y mira `ovw/s` y `to` en `tools/monitor.py`.
+7. **Backpressure y cliente lento.** Sigue el paso 3 de `docs/sustentacion/guia-de-sustentacion.md` (`tools/slow_client.py --keepalive --room N`) y mira `ovw/s` y `to` en `tools/monitor.py`.
 8. **La condición de carrera.** `git checkout demo/race-bug`, arranca el servidor y corre `tools/race_demo.py 8080`. Mira los estados/s caer a 0. Vuelve con `git checkout main`.
 9. **Los modelos de concurrencia.** `.venv/bin/python tools/model_bench.py --clients 300 --models asyncio,threads --seconds 8`. Compara CPU e hilos.
 10. **El WebSocket en el navegador.** En el navegador, F12 → pestaña **Red/Network** → filtro **WS** → entra a una sala y mira los mensajes `rooms`, `roster`, `state` en vivo y el `101 Switching Protocols`.
@@ -631,7 +631,7 @@ Cada bloque termina con un criterio: **puedes explicarlo sin mirar**.
 | 5. Arquitectura | §6; refactoring.guru (los 5 patrones) | Lee `docs/arquitectura.md` | Cada patrón: problema, alternativa sin él, línea de código |
 | 6. Tiempo real | §5, §7 | Mira `tools/monitor.py` con bots | Servidor autoritativo, tick, interpolación, qué se simplificó |
 | 7. La bitácora | §10 | Reproduce 2 errores | Cada error: qué, por qué, corrección, verificación |
-| 8. Ensayo | `docs/guion-demo.md` | Hazlo completo con OBS | Los 7 pasos y sus números |
+| 8. Ensayo | `docs/sustentacion/guia-de-sustentacion.md` | Hazlo completo en voz alta, como en la sustentación | Los 7 pasos y sus números |
 
 ---
 
