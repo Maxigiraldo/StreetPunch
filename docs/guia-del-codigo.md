@@ -91,19 +91,19 @@ Notación: `A → B` = "A llama a B". Cada paso lleva su `archivo:línea`.
 
 ### 2.1 Arranque del servidor
 
-1. `python -m server.main` ejecuta `main` (`server/main.py:124`).
+1. `python -m server.main` ejecuta `main` (`server/main.py:126`).
 2. `main()` configura el log, instala el filtro de log contra inundaciones
    (`RateLimitFilter` (`server/log_filters.py:17`)) y llama a `asyncio.run(serve_until_signal(build(...)))`.
-3. `load_static` (`server/main.py:38`) lee `client/` **una vez** a memoria (E/S síncrona permitida:
+3. `load_static` (`server/main.py:40`) lee `client/` **una vez** a memoria (E/S síncrona permitida:
    aún no hay clientes). Solo se sirve lo que está en ese diccionario, así que no
    existe el "path traversal".
-4. `build` (`server/main.py:71`) arma el grafo de objetos (inversión de dependencias):
+4. `build` (`server/main.py:73`) arma el grafo de objetos (inversión de dependencias):
    `Metrics` → `Arena` → `Hall` → `JsonFrameEncoder` → políticas de envío →
    `GameSession` → codecs → `HttpHandshake` → socket de escucha →
    `Listener` → `App`.
 5. `create_listen_socket` (`server/adapters/listener.py:25`) crea el socket **a mano**: `SO_REUSEADDR`,
    `bind`, `listen(128)`, `setblocking(False)`.
-6. `serve_until_signal` (`server/main.py:103`) registra SIGINT/SIGTERM y lanza `App.run` (`server/main.py:58`), que
+6. `serve_until_signal` (`server/main.py:105`) registra SIGINT/SIGTERM y lanza `App.run` (`server/main.py:60`), que
    crea la tarea del tick (`GameSession.run_tick_loop` (`server/application/game_session.py:233`)) y llama a
    `Listener.serve` (`server/adapters/listener.py:78`).
 7. `Listener.serve` entrega el socket a `asyncio.start_server(sock=..., backlog=128)`.
@@ -125,7 +125,7 @@ Notación: `A → B` = "A llama a B". Cada paso lleva su `archivo:línea`.
    `Sec-WebSocket-Accept` con `accept_key` (`server/adapters/http_handshake.py:61`)). Responde `101`.
    Si era `GET /` o `/metrics`, sirve la página y cierra.
 4. Si hubo upgrade, `_serve_client` crea la sesión con `session_factory`
-   (definida en `build` (`server/main.py:71`)) y llama a `ClientSession.run` (`server/adapters/client_session.py:122`).
+   (definida en `build` (`server/main.py:73`)) y llama a `ClientSession.run` (`server/adapters/client_session.py:122`).
 5. `run` crea **tres tareas**: `ClientSession._read_loop` (`server/adapters/client_session.py:149`),
    `ClientSession._write_loop` (`server/adapters/client_session.py:247`) y `ClientSession._ping_loop` (`server/adapters/client_session.py:232`),
    y espera a que termine la primera de reader/writer.
@@ -146,7 +146,7 @@ Notación: `A → B` = "A llama a B". Cada paso lleva su `archivo:línea`.
 
 ### 2.3 Crear una sala y unirse
 
-1. Clic en **Crear sala** → `els.create` envía `{"t":"create"}` (`send` (`client/client.js:334`)).
+1. Clic en **Crear sala** → `els.create` envía `{"t":"create"}` (`send` (`client/client.js:368`)).
 2. Servidor: reader → `_on_text` → `MessageCodec.decode` (`server/adapters/codec.py:49`) con el codec del juego;
    el registro `{tipo: fábrica}` elige `game_codec` (`server/adapters/codec.py:134`) → `_create_room` →
    `CreateRoomCommand`.
@@ -159,7 +159,7 @@ Notación: `A → B` = "A llama a B". Cada paso lleva su `archivo:línea`.
 5. Mismo tick, `GameSession._publish_notices` (`server/application/game_session.py:152`) compara la sala real con
    la última avisada y envía `{"t":"room","id":N}`; las demás publicaciones envían
    `roster` (a los de la sala) y la nueva lista `rooms` (al vestíbulo).
-6. Navegador: `handlers` (`client/client.js:164`) → `room` llama a `resetRoomState` (`client/client.js:227`) y `showView` (`client/client.js:241`):
+6. Navegador: `handlers` (`client/client.js:181`) → `room` llama a `resetRoomState` (`client/client.js:247`) y `showView` (`client/client.js:269`):
    se oculta el vestíbulo y aparece la partida.
 7. **Unirse** es igual con `{"t":"join","room":N}` → `JoinRoomCommand` →
    `Hall.join_room` (`server/domain/hall.py:99`). Si la sala está llena o jugando no se lanza ninguna
@@ -196,7 +196,7 @@ tick, `Hall.step` (`server/domain/hall.py:124`) llama a `Room.step` (`server/dom
 
 ### 2.5 Un movimiento y una embestida, del teclado a la pantalla
 
-1. `keydown` → `syncIntent` (`client/client.js:354`): calcula la intención `(dx, dy)` con `Math.sign` y
+1. `keydown` → `syncIntent` (`client/client.js:388`): calcula la intención `(dx, dy)` con `Math.sign` y
    **solo envía si cambió** (el servidor recuerda la dirección).
 2. Servidor: `input` → `game_codec` (`server/adapters/codec.py:134`) valida (enteros en {-1,0,1}, no booleanos)
    → `MoveCommand` → cola → tick → `MoveCommand.execute` (`server/domain/commands.py:117`) →
@@ -213,8 +213,8 @@ tick, `Hall.step` (`server/domain/hall.py:124`) llama a `Room.step` (`server/dom
 5. `GameSession._publish_states` (`server/application/game_session.py:211`): por sala, si la política de la fase
    dice enviar (`SendPolicy` (`server/application/send_policies.py:12`)), `GameSession._snapshot` (`server/application/game_session.py:201`) +
    `JsonFrameEncoder.encode_state` (`server/adapters/codec.py:160`) **una vez** y el mismo objeto `bytes` va al buzón de cada jugador.
-6. Navegador: `state` → `pushSnapshot` (`client/client.js:109`); `interpolatedDiscs` (`client/client.js:145`) dibuja ~100 ms
-   en el pasado mezclando dos estados; `draw` (`client/client.js:635`) corre con `requestAnimationFrame`.
+6. Navegador: `state` → `pushSnapshot` (`client/client.js:126`); `interpolatedDiscs` (`client/client.js:162`) dibuja ~100 ms
+   en el pasado mezclando dos estados; `draw` (`client/client.js:830`) corre con `requestAnimationFrame`.
 
 ### 2.6 Un cliente se va (de cualquier forma)
 
@@ -240,9 +240,9 @@ tick, `Hall.step` (`server/domain/hall.py:124`) llama a `Room.step` (`server/dom
 
 ### 2.8 Apagado con `kill -TERM`
 
-1. El manejador de señal (`serve_until_signal` (`server/main.py:103`)) solo marca un `Event`
+1. El manejador de señal (`serve_until_signal` (`server/main.py:105`)) solo marca un `Event`
    (un manejador no puede hacer `await`).
-2. La corrutina principal llama a `App.shutdown` (`server/main.py:65`) → `Listener.shutdown` (`server/adapters/listener.py:97`):
+2. La corrutina principal llama a `App.shutdown` (`server/main.py:67`) → `Listener.shutdown` (`server/adapters/listener.py:97`):
    cierra el socket de escucha, pide a cada sesión `request_shutdown` (close 1001),
    espera `SHUTDOWN_GRACE_S` (2 s) y aborta a los que no cooperen.
 3. Medido: 23 ms con 20 clientes, todos reciben `close 1001`.
@@ -606,20 +606,20 @@ descarte lo pendiente y mande **RST**. Verificado con `ss -tan`.
 
 ### 3.4 Transversales: arranque, configuración, métricas y logs
 
-#### `main` (`server/main.py:124`) — el único lugar que construye y conecta (`server/main.py`)
+#### `main` (`server/main.py:126`) — el único lugar que construye y conecta (`server/main.py`)
 
 | Elemento | Qué hace |
 | --- | --- |
-| `load_static` (`server/main.py:38`) | Carga `client/*.html`, `.js` y `.css` en un dict `{ruta: StaticFile}` al arrancar |
-| `App` (`server/main.py:53`) | Agrupa `listener`, `game`, `metrics`. `App.run` (`server/main.py:58`): lanza el tick y sirve; `App.shutdown` (`server/main.py:65`): apagado ordenado |
-| `build` (`server/main.py:71`) | Arma el grafo de objetos. Define `new_session` (fábrica de `ClientSession`) y `metrics_page` (`GET /metrics`: solo lectura, así que no rompe el único escritor) |
-| `serve_until_signal` (`server/main.py:103`) | Instala SIGINT/SIGTERM (marcan un `Event`: un manejador no puede hacer `await`), corre el servidor y, al recibir la señal, llama a `app.shutdown()` |
-| `main` (`server/main.py:124`) | Configura el log, filtro anti-inundación y `asyncio.run(...)` |
+| `load_static` (`server/main.py:40`) | Carga los archivos de `client/` (`.html`, `.js`, `.css`, `.woff2`, `.mp3`) en un dict `{ruta: StaticFile}` al arrancar |
+| `App` (`server/main.py:55`) | Agrupa `listener`, `game`, `metrics`. `App.run` (`server/main.py:60`): lanza el tick y sirve; `App.shutdown` (`server/main.py:67`): apagado ordenado |
+| `build` (`server/main.py:73`) | Arma el grafo de objetos. Define `new_session` (fábrica de `ClientSession`) y `metrics_page` (`GET /metrics`: solo lectura, así que no rompe el único escritor) |
+| `serve_until_signal` (`server/main.py:105`) | Instala SIGINT/SIGTERM (marcan un `Event`: un manejador no puede hacer `await`), corre el servidor y, al recibir la señal, llama a `app.shutdown()` |
+| `main` (`server/main.py:126`) | Configura el log, filtro anti-inundación y `asyncio.run(...)` |
 
 #### `Config` (`server/config.py:16`) — todos los números, cada uno con su porqué (`server/config.py`)
 
 Dataclass **congelada** (nadie la modifica en caliente; se pasa por constructor, no es variable global).
-`Config.TICK_DT` (`server/config.py:264`) y `Config.QUIET_EVERY_N_TICKS` (`server/config.py:269`) son derivados. `Config.__post_init__` (`server/config.py:278`)
+`Config.TICK_DT` (`server/config.py:267`) y `Config.QUIET_EVERY_N_TICKS` (`server/config.py:272`) son derivados. `Config.__post_init__` (`server/config.py:281`)
 **valida al arrancar** (una configuración incoherente falla al inicio, no a mitad de partida):
 *tunneling* (`max(MAX_SPEED, DASH_MAX_SPEED) × dt < DISC_RADIUS`), `SLIDE_FRICTION ≤ FRICTION`,
 `QUIET_PHASE_HZ` divide a `TICK_HZ`, `2 ≤ MIN_PLAYERS ≤ MAX_ROOM_PLAYERS ≤ MAX_CONNECTIONS`,
@@ -646,25 +646,30 @@ pasar uno cada `LOG_REPEAT_INTERVAL_S` (5 s), cuenta los suprimidos y quita el t
 El cliente **no decide nada del juego**: envía **intenciones** (hacia dónde quiere ir, si carga),
 nunca posiciones, y dibuja lo que el servidor le manda. El servidor es la autoridad.
 
-### 4.1 `index.html`
+### 4.1 `index.html` y `style.css`
 
-Tres zonas: el formulario de nombre (`id="join"` (`client/index.html:41`)), el **vestíbulo** (`id="lobby"` (`client/index.html:49`):
-lista de salas y botón *Crear sala*) y la **partida** (`id="game"` (`client/index.html:58`): barra con *Iniciar partida* y
-*Salir de la sala*, el `canvas`, el HUD y el marcador). `showView()` alterna vestíbulo/partida con el atributo `hidden`.
+El HTML es solo estructura; el aspecto neón (Orbitron, brillos, tarjetas) está en `style.css`. Pantallas: un botón de
+sonido (`id="sound"` (`client/index.html:15`)), la **entrada** (`id="entry"` (`client/index.html:23`), con el
+formulario `id="join"` (`client/index.html:25`)), el **vestíbulo** (`id="lobby"` (`client/index.html:33`): lista de salas y
+*Crear sala*) y la **partida** (`id="game"` (`client/index.html:42`): barra con *Iniciar partida* y *Salir de la sala*, y un `#stage`
+(`client/index.html:48`) con el `canvas`, la capa central `#overlay` (`client/index.html:51`: espera y cuenta regresiva), el
+marcador `#board` (`client/index.html:63`) y el resultado `#result` (`client/index.html:68`)). `showView()` alterna entrada,
+vestíbulo y partida con el atributo `hidden`. Todo el texto de DOM que cambia con el juego (HUD, marcador, capa central,
+resultado) se reescribe **solo cuando llega un tick nuevo y su contenido cambió**, no a 60 Hz.
 
 ### 4.2 `client.js`: estado y mensajes
 
 | Elemento | Qué hace | Se conecta con |
 | --- | --- | --- |
-| `els` (`client/client.js:72`) | Referencias a los elementos del DOM | todo el archivo |
-| `session` (`client/client.js:90`) | **Todo el estado del cliente en un objeto**: socket, mi id, sala actual (`room`, `null` = vestíbulo), lista de salas, anfitrión, roster, último estado | los manejadores |
-| `handlers` (`client/client.js:164`) | **Registro `{tipo de mensaje: manejador}`** (igual que el codec del servidor): `welcome`, `rooms`, `room`, `roster`, `state`, `error`. Un tipo nuevo es una entrada nueva | `onMessage` |
-| `onMessage` (`client/client.js:212`) | `JSON.parse` y despacha; un tipo desconocido se ignora (un servidor más nuevo no rompe a un cliente viejo). Usa `Object.hasOwn` para que `t:"constructor"` no encuentre métodos heredados | `socket.message` |
-| `connect` (`client/client.js:273`) | Limpia el estado, abre el WebSocket (`wss` si la página es https), envía `hello` al abrir, y al cerrar vuelve a la pantalla inicial | formulario de nombre |
-| `resetRoomState` (`client/client.js:227`) | Borra lo que pertenece a **una sala** (estado, jugadores, controles, interpolación, marcador) | `room`, `connect`, `close` |
-| `showView` (`client/client.js:241`) | Muestra el vestíbulo o la partida | `room`, `connect`, `close` |
-| `renderRooms` (`client/client.js:248`) | Dibuja la lista de salas con **`textContent`**, nunca HTML (los nombres los eligen otros jugadores). El botón se deshabilita si `!room.open` | `rooms` |
-| `send` (`client/client.js:334`) | `socket.send(JSON.stringify(msg))` solo si el socket está abierto | controles y botones |
+| `els` (`client/client.js:61`) | Referencias a los elementos del DOM | todo el archivo |
+| `session` (`client/client.js:107`) | **Todo el estado del cliente en un objeto**: socket, mi id, sala actual (`room`, `null` = vestíbulo), lista de salas, anfitrión, roster, último estado | los manejadores |
+| `handlers` (`client/client.js:181`) | **Registro `{tipo de mensaje: manejador}`** (igual que el codec del servidor): `welcome`, `rooms`, `room`, `roster`, `state`, `error`. Un tipo nuevo es una entrada nueva | `onMessage` |
+| `onMessage` (`client/client.js:232`) | `JSON.parse` y despacha; un tipo desconocido se ignora (un servidor más nuevo no rompe a un cliente viejo). Usa `Object.hasOwn` para que `t:"constructor"` no encuentre métodos heredados | `socket.message` |
+| `connect` (`client/client.js:305`) | Limpia el estado, abre el WebSocket (`wss` si la página es https), envía `hello` al abrir, y al cerrar vuelve a la pantalla inicial | formulario de nombre |
+| `resetRoomState` (`client/client.js:247`) | Borra lo que pertenece a **una sala** (estado, jugadores, controles, interpolación, marcador) | `room`, `connect`, `close` |
+| `showView` (`client/client.js:269`) | Muestra el vestíbulo o la partida | `room`, `connect`, `close` |
+| `renderRooms` (`client/client.js:277`) | Dibuja la lista de salas con **`textContent`**, nunca HTML (los nombres los eligen otros jugadores). El botón se deshabilita si `!room.open` | `rooms` |
+| `send` (`client/client.js:368`) | `socket.send(JSON.stringify(msg))` solo si el socket está abierto | controles y botones |
 
 ### 4.3 Interpolación (dibujar en el pasado)
 
@@ -673,41 +678,75 @@ y se dibuja ~100 ms en el pasado mezclando los dos estados que rodean ese instan
 
 | Función | Qué hace |
 | --- | --- |
-| `timeline` (`client/client.js:102`) | Estados recibidos con su hora de llegada y el intervalo medio |
-| `pushSnapshot` (`client/client.js:109`) | Guarda el estado y actualiza el intervalo medio (media móvil). Tope `MAX_SNAPSHOTS` |
-| `interpolatedDiscs` (`client/client.js:145`) | Calcula los discos en `now - retraso`; el retraso es `max(100 ms, 1,5 × intervalo)`; si no hay dos estados que mezclar, mantiene el último |
-| `lerpDiscs` (`client/client.js:133`), `lerp` (`client/client.js:129`) | Mezcla lineal de posición y carga; el `vivo` se toma del estado anterior |
-| `startsNewRound` (`client/client.js:125`) | Al empezar la cuenta atrás los discos **saltan** a su punto de salida: no se mezclan (se deslizarían por la arena) |
+| `timeline` (`client/client.js:119`) | Estados recibidos con su hora de llegada y el intervalo medio |
+| `pushSnapshot` (`client/client.js:126`) | Guarda el estado y actualiza el intervalo medio (media móvil). Tope `MAX_SNAPSHOTS` |
+| `interpolatedDiscs` (`client/client.js:162`) | Calcula los discos en `now - retraso`; el retraso es `max(100 ms, 1,5 × intervalo)`; si no hay dos estados que mezclar, mantiene el último |
+| `lerpDiscs` (`client/client.js:150`), `lerp` (`client/client.js:146`) | Mezcla lineal de posición y carga; el `vivo` se toma del estado anterior |
+| `startsNewRound` (`client/client.js:142`) | Al empezar la cuenta atrás los discos **saltan** a su punto de salida: no se mezclan (se deslizarían por la arena) |
 
 ### 4.4 Controles
 
 | Elemento | Qué hace |
 | --- | --- |
-| `MOVE_KEYS` (`client/client.js:311`) | `event.code` (tecla **física**, igual en cualquier teclado) → dirección. `dy = -1` es arriba porque el canvas crece hacia abajo |
-| `CHARGE_CODES` (`client/client.js:319`) | Espacio, J y K cargan (con varias, el *ghosting* del teclado no impide cargar) |
-| `controls` (`client/client.js:321`) | Teclas pulsadas, última intención enviada, si se carga, fin del enfriamiento (estimado) y hacia dónde apunta |
-| `currentIntent` (`client/client.js:339`) | Suma las direcciones pulsadas con `Math.sign` (ejes en -1/0/1) |
-| `syncIntent` (`client/client.js:354`) | **Solo envía si la intención cambió**: el servidor recuerda la dirección y limita a 4 órdenes por tick |
-| `ownCharge` (`client/client.js:362`), `setCharging` (`client/client.js:367`) | Carga de mi disco; al soltar con carga suficiente (`min_charge`) estima el enfriamiento para el anillo gris |
-| `resetControls` (`client/client.js:376`), `newRound` (`client/client.js:387`), `resyncControls` (`client/client.js:394`) | Olvidan teclas/puntería; al empezar a jugar se **reenvía** la tecla que el jugador siga manteniendo (el cliente creería que ya la mandó) |
-| `phaseEntered` (`client/client.js:401`) | Registro `{fase: función}` que se ejecuta al entrar a una fase |
-| `isTyping` (`client/client.js:403`) | Si se escribe el nombre, las teclas no son órdenes de juego |
-| `window.addEventListener("keydown"` (`client/client.js:407`), `window.addEventListener("keyup"` (`client/client.js:424`) | Pulsar/soltar; `keyup` **no** mira `isTyping` a propósito (soltar siempre debe contar) |
-| `window.addEventListener("blur"` (`client/client.js:437`) | Si la ventana pierde el foco con una tecla pulsada el navegador no manda `keyup`: se suelta todo |
-| `els.create.addEventListener` (`client/client.js:444`), `els.leave.addEventListener` (`client/client.js:445`), `els.start.addEventListener` (`client/client.js:450`) | Botones: crear sala, salir, iniciar (hacen `blur()` para que Espacio no los "pulse" en plena ronda) |
+| `MOVE_KEYS` (`client/client.js:345`) | `event.code` (tecla **física**, igual en cualquier teclado) → dirección. `dy = -1` es arriba porque el canvas crece hacia abajo |
+| `CHARGE_CODES` (`client/client.js:353`) | Espacio, J y K cargan (con varias, el *ghosting* del teclado no impide cargar) |
+| `controls` (`client/client.js:355`) | Teclas pulsadas, última intención enviada, si se carga, fin del enfriamiento (estimado) y hacia dónde apunta |
+| `currentIntent` (`client/client.js:373`) | Suma las direcciones pulsadas con `Math.sign` (ejes en -1/0/1) |
+| `syncIntent` (`client/client.js:388`) | **Solo envía si la intención cambió**: el servidor recuerda la dirección y limita a 4 órdenes por tick |
+| `ownCharge` (`client/client.js:396`), `setCharging` (`client/client.js:401`) | Carga de mi disco; al soltar con carga suficiente (`min_charge`) estima el enfriamiento para el anillo gris |
+| `resetControls` (`client/client.js:417`), `newRound` (`client/client.js:429`), `resyncControls` (`client/client.js:439`) | Olvidan teclas/puntería; al empezar a jugar se **reenvía** la tecla que el jugador siga manteniendo (el cliente creería que ya la mandó) |
+| `phaseEntered` (`client/client.js:455`) | Registro `{fase: función}` que se ejecuta al entrar a una fase: `countdown` → `newRound`, `playing` → `resyncControls`, `round_over` → `roundOver` (`client/client.js:451`: corta la carga y, si ganaste, suena el jingle) |
+| `isTyping` (`client/client.js:462`) | Si se escribe el nombre, las teclas no son órdenes de juego |
+| `window.addEventListener("keydown"` (`client/client.js:466`), `window.addEventListener("keyup"` (`client/client.js:483`) | Pulsar/soltar; `keyup` **no** mira `isTyping` a propósito (soltar siempre debe contar) |
+| `window.addEventListener("blur"` (`client/client.js:496`) | Si la ventana pierde el foco con una tecla pulsada el navegador no manda `keyup`: se suelta todo |
+| `els.create.addEventListener` (`client/client.js:503`), `els.leave.addEventListener` (`client/client.js:504`), `els.start.addEventListener` (`client/client.js:509`) | Botones: crear sala, salir, iniciar (hacen `blur()` para que Espacio no los "pulse" en plena ronda) |
 
 ### 4.5 Pantalla
 
 | Función | Qué hace |
 | --- | --- |
-| `frame` (`client/client.js:688`) | Bucle con `requestAnimationFrame`: dibuja a la frecuencia de la pantalla y reescribe el DOM (HUD, marcador, botón de iniciar) **solo cuando llega un tick nuevo** |
-| `draw` (`client/client.js:635`) | Arena, discos (interpolados), anillo de carga, flecha de puntería y anillo de enfriamiento del propio disco, nombres y el texto de la fase |
-| `drawOverlay` (`client/client.js:578`), `overlayFor` (`client/client.js:491`) | Texto central por fase (registro `{fase: función}`): sala de espera (distinto para el anfitrión), cuenta atrás, ganador |
-| `drawAim` (`client/client.js:591`), `drawCooldown` (`client/client.js:623`), `drawText` (`client/client.js:568`) | Flecha de puntería, anillo gris de recarga (**estimación del cliente**), texto con contorno |
-| `describe` (`client/client.js:480`) | Texto del HUD (fase, segundos, "embestida lista/recargando") |
-| `scoreRows` (`client/client.js:525`), `renderScores` (`client/client.js:542`) | Filas del marcador (más victorias primero); el DOM solo se reconstruye si cambió |
-| `isHost` (`client/client.js:513`), `syncStartButton` (`client/client.js:519`) | El botón *Iniciar partida* solo para el anfitrión y solo en espera. Es comodidad: el servidor ignora la orden de cualquier otro |
-| `discColor` (`client/client.js:467`), `nameOf` (`client/client.js:471`), `amPlaying` (`client/client.js:476`), `setStatus` (`client/client.js:463`) | Utilidades; `setStatus` usa `textContent` (nunca `innerHTML`) |
+| `frame` (`client/client.js:892`) | Bucle con `requestAnimationFrame`: dibuja a la frecuencia de la pantalla y reescribe el DOM (HUD, marcador, capa central, resultado, botón de iniciar) **solo cuando llega un tick nuevo**. Con `?fps` en la URL mide FPS |
+| `draw` (`client/client.js:830`) | Orquesta UN fotograma: copia la capa estática de la arena, interpola los discos, detecta eliminaciones, llama a `paintDisc` por robot y al final dibuja columnas y partículas |
+| `observePair` (`client/client.js:762`) | **Deduce lo que el servidor no manda**: velocidad por disco = desplazamiento entre dos `state` / diferencia de `tick` (no depende del jitter de red). De ahí salen embestida (soltar la carga), golpe (cambio brusco de velocidad) y el sonido correspondiente |
+| `aimOf` (`client/client.js:806`) | Hacia dónde apunta la flecha del propio disco: la última dirección enviada o, sin ninguna, el centro (como el servidor) |
+| `pixelsPerUnit` (`client/client.js:813`), `warmSprites` (`client/client.js:820`) | Escala mundo→píxeles; hornea los sprites de todos los colores al llegar el `roster` (sala de espera), para que ningún fotograma de la ronda pague ese coste |
+| `overlayFor` (`client/client.js:568`), `renderOverlay` (`client/client.js:730`), `hideOverlay` (`client/client.js:659`) | Texto central por fase (registro `{fase: función}`) **en DOM**: sala de espera (distinto para el anfitrión), cuenta atrás, empate/ganador. Solo toca el DOM si el texto cambió |
+| `syncCountdownRing` (`client/client.js:714`) | Anillo SVG de la cuenta regresiva: se vacía en cada segundo con la API de animaciones (WAAPI), empezando por lo que queda de ese segundo |
+| `renderResult` (`client/client.js:677`), `hideResult` (`client/client.js:670`) | Pantalla de resultado en `round_over`: copa, título, top 5 por victorias y botón *Volver al vestíbulo* (envía `leave`). Dura lo que dure la fase (`RESULTS_S`, 3 s) |
+| `describe` (`client/client.js:556`) | Texto del HUD (fase, segundos, "embestida lista/recargando") |
+| `scoreRows` (`client/client.js:603`), `renderScores` (`client/client.js:620`) | Filas del marcador sobre el canvas (más victorias primero, corona al líder, contador `n/máx`); el DOM solo se reconstruye si cambió |
+| `isHost` (`client/client.js:591`), `syncStartButton` (`client/client.js:597`) | El botón *Iniciar partida* solo para el anfitrión y solo en espera. Es comodidad: el servidor ignora la orden de cualquier otro |
+| `discColor` (`client/client.js:543`), `nameOf` (`client/client.js:547`), `amPlaying` (`client/client.js:552`), `setStatus` (`client/client.js:539`) | Utilidades; `setStatus` usa `textContent` (nunca `innerHTML`) |
+
+### 4.6 `neon.js`: el dibujo (todo con código, sin imágenes)
+
+Regla de rendimiento que lo gobierna: **`shadowBlur` hace un desenfoque por cada trazo**, así que solo se usa al *construir*
+capas y sprites (una vez), nunca dentro de un fotograma. Cada fotograma hace `drawImage`, arcos y líneas. Medido en Chrome
+con 8 jugadores: ~143 FPS (pantalla a 144 Hz), también con la CPU frenada 4×.
+
+| Elemento | Qué hace |
+| --- | --- |
+| `buildArenaLayer` (`client/neon.js:425`) | Capa **estática** en un `OffscreenCanvas`: cielo, ciudad, luna, props de azotea, piso en placas, reborde, anillo de neón en tramos y corona. Se pinta UNA vez; cada fotograma es un `drawImage` |
+| `paintRobot` (`client/neon.js:631`), `ROBOT_ACCESSORIES` (`client/neon.js:571`) | Sprite de robot visto desde arriba (cuerpo, visor, dos ojos, antenas) + un accesorio por color. Los accesorios son un **registro** `{nombre: accesorio}`, no una cadena de `if` |
+| `Sprites` (`client/neon.js:705`) | Cachés de sprites horneados: robot, silueta blanca, halo, punto, cuadrado, estrella, columna, etiquetas de nombre (con tope `LABEL_CACHE_MAX`: los nombres los elige la gente) |
+| `ParticlePool` (`client/neon.js:891`), `EliminationBeams` (`client/neon.js:984`) | Partículas en arreglos de tamaño fijo con **tope** `MAX_PARTICLES` (al llenarse se pisa la más antigua); columna de luz violeta al eliminar |
+| `DiscFx` (`client/neon.js:1034`), `FxTracker` (`client/neon.js:1077`) | Estado de animación por disco: rumbo, velocidad, destello, muerte, estela |
+| `paintDisc` (`client/neon.js:1173`) | Un robot con todas sus animaciones: balanceo en reposo, brillo y anillo al cargar, estela y líneas de velocidad en la embestida, destello y estrellas al golpe, encoger y apagar al eliminar |
+| `glowArc` (`client/neon.js:1101`), `drawAimArrow` (`client/neon.js:1117`), `drawOwnMarker` (`client/neon.js:1146`) | Anillo con "brillo" de dos trazos (ancho y tenue + fino y vivo, sin sombras); flecha de puntería; triángulo sobre el propio robot |
+| `TRAIL_MIN_UNITS_PER_TICK` (`client/neon.js:127`), `HIT_MIN_DV_UNITS_PER_TICK` (`client/neon.js:128`), `DASH_GRACE_MS` (`client/neon.js:129`) | Umbrales con que el cliente **infiere** embestida y golpe. Límite honesto: dependen de `config.py` (`MAX_SPEED`, `DASH_MAX_SPEED`, `TICK_HZ`) y el cliente no los recibe; si cambian allí hay que reajustarlos |
+| `PerfMeter` (`client/neon.js:1307`) | Con `?fps` en la URL: FPS, "1 % peor" y ms de dibujo; deja `window.__perf` legible desde fuera |
+
+### 4.7 `audio.js`: música y efectos
+
+| Elemento | Qué hace |
+| --- | --- |
+| `MUSIC_TRACKS` (`client/audio.js:20`), `SFX_TRACKS` (`client/audio.js:25`) | Tabla de pistas y volúmenes (medidos en dBFS; la razón está en el comentario). Cambiar de pista es cambiar una entrada. Origen y licencia: `client/CREDITS.txt` |
+| `GameAudio` (`client/audio.js:43`) | Música desde un `Blob` (el servidor no entiende `Range`) y efectos con Web Audio (`AudioBuffer`, se pueden solapar). Hasta el primer gesto del jugador (`unlock`) todo es mudo: es la política de autoplay del navegador |
+| `applyMusic` (`client/audio.js:99`), `transitionTo` (`client/audio.js:109`) | Las transiciones de música se **encadenan en serie**: la pista que sale se apaga entera antes de que entre la otra. Nunca suenan dos a la vez (medido: 0 solapes en 1083 muestras de una partida y 0 en un estrés cada 120 ms) |
+| `play` (`client/audio.js:160`), `startCharge` (`client/audio.js:177`) | Un efecto = un `BufferSource` nuevo; limitador de 70 ms por efecto; la carga suena mientras se mantiene la tecla y se corta al soltar |
+| `musicForPhase` (`client/client.js:27`), `syncMusic` (`client/client.js:458`) | Registro `{fase: pista}` (batalla solo jugando; el resto, la del vestíbulo) y quien la aplica |
+
+Si un archivo de audio no carga, el juego sigue sin ese sonido: el audio nunca debe romper la partida.
 
 ## 5. Dónde está lo importante (para la defensa)
 
@@ -726,15 +765,15 @@ Ordenado por peso en la rúbrica. Si te preguntan una cosa, **ve directo a esta 
 | 9 | **Semáforo y rechazo (`full`/1013)** | `Listener._on_connect` (`server/adapters/listener.py:122`), `Listener._reject` (`server/adapters/listener.py:177`) | Cupo tomado sin suspensión; rechazar también está acotado |
 | 10 | **Todo recurso en un `finally`** | `Listener._on_connect` (`server/adapters/listener.py:122`), `ClientSession.run` (`server/adapters/client_session.py:122`) | Socket, cupo, tareas y `Disconnect` se liberan pase lo que pase |
 | 11 | **Tres timeouts** | `Listener._handshake_with_timeout` (`server/adapters/listener.py:166`), `ClientSession._read_timeout` (`server/adapters/client_session.py:172`), `ClientSession._drain` (`server/adapters/client_session.py:282`) | Saludo (5 s, total), inactividad (30 s con ping cada 10 s) y escritura (10 s) |
-| 12 | **Apagado con SIGTERM** | `serve_until_signal` (`server/main.py:103`), `Listener.shutdown` (`server/adapters/listener.py:97`) | Handler → `Event`; close 1001 a todos; gracia de 2 s; aborta rezagados |
+| 12 | **Apagado con SIGTERM** | `serve_until_signal` (`server/main.py:105`), `Listener.shutdown` (`server/adapters/listener.py:97`) | Handler → `Event`; close 1001 a todos; gracia de 2 s; aborta rezagados |
 | 13 | **`abort_with_reset` (RST)** | `abort_with_reset` (`server/adapters/net_util.py:11`) | `abort()` deja el socket en `FIN-WAIT-1` con ventana cero |
 | 14 | **Patrón Command + doble despacho** | `Command.run` (`server/domain/commands.py:35`), `HallCommand.run` (`server/domain/commands.py:53`), `GameSession._apply_inputs` (`server/application/game_session.py:135`) | El tick no distingue tipos; el límite por cliente y tick es parejo |
 | 15 | **Patrón State** | `RoundState` (`server/domain/round_states.py:34`), `Room.step` (`server/domain/room.py:21`) | El tick no pregunta la fase; cada fase devuelve la siguiente |
 | 16 | **Reglas de las salas** | `Hall.join_room` (`server/domain/hall.py:99`), `Hall.leave_room` (`server/domain/hall.py:113`) | Solo se entra con sitio y en espera; sala vacía desaparece; rechazos sin excepciones |
 | 17 | **Patrón Factory Method (registro)** | `game_codec` (`server/adapters/codec.py:134`), `MessageCodec.decode` (`server/adapters/codec.py:49`) | Un mensaje nuevo es una entrada, no un `elif`; toda la validación está aquí |
-| 18 | **Patrón Strategy** | `SendPolicy` (`server/application/send_policies.py:12`), `build` (`server/main.py:71`) | Frecuencia de envío por fase de la sala |
+| 18 | **Patrón Strategy** | `SendPolicy` (`server/application/send_policies.py:12`), `build` (`server/main.py:73`) | Frecuencia de envío por fase de la sala |
 | 19 | **Patrón Observer / puertos** | `SnapshotObserver` (`server/application/ports.py:52`) | `GameSession` no conoce el WebSocket |
-| 20 | **Configuración validada** | `Config.__post_init__` (`server/config.py:278`) | Una configuración incoherente falla al arrancar |
+| 20 | **Configuración validada** | `Config.__post_init__` (`server/config.py:281`) | Una configuración incoherente falla al arrancar |
 | 21 | **Física determinista** | `Physics.step` (`server/domain/physics.py:20`) | Paso fijo, orden documentado, tope de velocidad contra el *tunneling* |
 | 22 | **Paso fijo del tick** | `GameSession.run_tick_loop` (`server/application/game_session.py:233`) | `next_at += dt`; sin espiral de recuperación |
 | 23 | **Anti-inundación de logs** | `RateLimitFilter.filter` (`server/log_filters.py:32`) | `logging` es síncrono |
@@ -743,7 +782,7 @@ Ordenado por peso en la rúbrica. Si te preguntan una cosa, **ve directo a esta 
 
 | Pregunta de auditoría | Respuesta | Evidencia |
 | --- | --- | --- |
-| ¿Hay alguna llamada bloqueante en el event loop? | No. La E/S de archivos solo ocurre al arrancar | `load_static` (`server/main.py:38`) |
+| ¿Hay alguna llamada bloqueante en el event loop? | No. La E/S de archivos solo ocurre al arrancar | `load_static` (`server/main.py:40`) |
 | ¿Hay un `await` sobre un socket dentro del tick? | No. `tick()` es síncrono; el único `await` del bucle es `asyncio.sleep` | `GameSession.tick` (`server/application/game_session.py:121`), `GameSession.run_tick_loop` (`server/application/game_session.py:233`) |
 | ¿Alguna tarea distinta del tick modifica estado, registro u observadores? | No. Entrar, salir, crear, unirse, iniciar, mover y cargar son comandos | `GameSession.submit_input` (`server/application/game_session.py:70`), `GameSession.submit_membership` (`server/application/game_session.py:79`) |
 | ¿Hay un `await` entre leer y modificar un recurso compartido? | No en el tick. En `_on_connect`, entre `locked()` y `acquire()` no hay suspensión (comentado en el código) | `Listener._on_connect` (`server/adapters/listener.py:122`) |
@@ -753,7 +792,7 @@ Ordenado por peso en la rúbrica. Si te preguntan una cosa, **ve directo a esta 
 | ¿Una excepción de un cliente puede tumbar el servidor? | No: se captura y se cierra solo esa conexión; un observador roto no detiene la difusión; un bug en el tick no lo congela | `Listener._serve_client` (`server/adapters/listener.py:146`), `ClientSession.run` (`server/adapters/client_session.py:122`), `GameSession._notify` (`server/application/game_session.py:223`) |
 | ¿Hay números mágicos fuera de `config.py`? | Solo constantes del protocolo (códigos de cierre, formato de trama) y de formato del cliente | `Config` (`server/config.py:16`), `CloseCode` (`server/adapters/ws_frames.py:36`) |
 | ¿El dominio importa algo de red? | No (hay una prueba que lo comprueba) | `tests/test_world.py::test_dominio_no_importa_red` |
-| ¿Hay un `if/elif` que debería ser polimorfismo o registro? | Los despachos son registros: codec, opcodes de trama, fases del cliente, manejadores del cliente. El `if/elif` de `Hall.join_room` son **reglas de negocio** en cadena, no un despacho por tipo | `game_codec` (`server/adapters/codec.py:134`), `ClientSession.__init__` (`server/adapters/client_session.py:39`), `handlers` (`client/client.js:164`) |
+| ¿Hay un `if/elif` que debería ser polimorfismo o registro? | Los despachos son registros: codec, opcodes de trama, fases del cliente, manejadores del cliente. El `if/elif` de `Hall.join_room` son **reglas de negocio** en cadena, no un despacho por tipo | `game_codec` (`server/adapters/codec.py:134`), `ClientSession.__init__` (`server/adapters/client_session.py:39`), `handlers` (`client/client.js:181`) |
 
 ## 7. Patrones y SOLID
 

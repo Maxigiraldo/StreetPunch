@@ -11,7 +11,7 @@ Los límites numéricos que se citan aquí viven en `server/config.py`.
 | Capa | Qué |
 | --- | --- |
 | TCP | Socket `SOCK_STREAM` creado a mano, `HOST:PORT` de `config.py` |
-| HTTP | `GET /` entrega `client/index.html` y los `.js`; `GET /ws` con `Upgrade: websocket` abre el WebSocket |
+| HTTP | `GET /` entrega `client/index.html`; los demás archivos de `client/` (`.js`, `.css`, `.woff2`, `.mp3`) se sirven por su nombre; `GET /ws` con `Upgrade: websocket` abre el WebSocket |
 | WebSocket | RFC 6455. Solo se usan tramas de texto (`0x1`), close (`0x8`), ping (`0x9`) y pong (`0xA`) |
 | Mensajes | Una trama de texto = un objeto JSON en UTF-8 con un campo `t` (tipo) |
 

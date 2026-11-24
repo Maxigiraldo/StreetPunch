@@ -261,7 +261,7 @@ streetsmash/
 │   ├── application/   game_session · ports · send_policies
 │   ├── adapters/      listener · http_handshake · ws_frames · codec · client_session
 │   └── config.py · metrics.py · main.py
-├── client/            index.html · net.js · render.js · input.js
+├── client/            index.html · style.css · client.js · neon.js · audio.js (+ fuente y audio, ver CREDITS.txt)
 ├── tools/             bots.py · slow_client.py · churn.py · fd_watch.sh
 ├── tests/             test_ws_frames · test_physics · test_round_states · test_codec
 ├── docs/              protocolo · justificacion-concurrencia · bitacora-ia · diagramas

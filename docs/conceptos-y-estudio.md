@@ -181,10 +181,10 @@ y se **responde** con otro close.
 
 * **Estructura de una petición:** línea de petición, cabeceras, línea en blanco (`\r\n\r\n`), cuerpo. RFC 9112 (HTTP/1.1) y 9110 (semántica).
 * **Códigos que aparecen:** 101, 200, 400, 404, 405, 426 (Upgrade Required), 431 (cabecera demasiado grande).
-* **Path traversal:** pedir `../../etc/passwd`. Se evita sirviendo solo lo que está en un diccionario cargado al arrancar (`load_static` (`server/main.py:38`)).
+* **Path traversal:** pedir `../../etc/passwd`. Se evita sirviendo solo lo que está en un diccionario cargado al arrancar (`load_static` (`server/main.py:40`)).
 * **Slowloris:** abrir conexiones y mandar la cabecera **muy despacio** para agotar descriptores. Se evita con un plazo **total** (`Listener._handshake_with_timeout` (`server/adapters/listener.py:166`)).
 * **Límite de tamaño:** sin tope de cabecera o de trama, un cliente nos haría reservar memoria sin límite (`read_head` (`server/adapters/http_handshake.py:112`), `FrameReader.next_frame` (`server/adapters/ws_frames.py:97`)).
-* **XSS:** el cliente escribe los nombres con `textContent`, nunca con `innerHTML` (`renderRooms` (`client/client.js:248`), `renderScores` (`client/client.js:542`)).
+* **XSS:** el cliente escribe los nombres con `textContent`, nunca con `innerHTML` (`renderRooms` (`client/client.js:277`), `renderScores` (`client/client.js:620`)).
 
 **Qué buscar.** "slowloris attack", "HTTP request smuggling" (solo contexto), "OWASP path traversal", "XSS textContent vs innerHTML".
 
@@ -245,7 +245,7 @@ Eso es lo que hace seguro modificar estructuras compartidas **sin cerrojos** mie
 **Matiz importante.** `await x` no siempre cede: si `x` no necesita esperar (p. ej. `Semaphore.acquire()` con cupo libre), sigue sin ceder el loop. El proyecto lo usa a propósito en
 `Listener._on_connect` (`server/adapters/listener.py:122`) (entre `locked()` y `acquire()` nadie puede robar el cupo).
 
-**Dónde está.** Tres tareas por cliente (`ClientSession.run` (`server/adapters/client_session.py:122`)) y una del tick (`App.run` (`server/main.py:58`)).
+**Dónde está.** Tres tareas por cliente (`ClientSession.run` (`server/adapters/client_session.py:122`)) y una del tick (`App.run` (`server/main.py:60`)).
 **Qué buscar.** Documentación de Python: *Coroutines and Tasks*, *Event Loop*; "asyncio cooperative multitasking", "asyncio await point yield control".
 
 ### 3.6 Condiciones de carrera **sin hilos** [A]
@@ -344,7 +344,7 @@ no se acumulen; si un tick se pasa de su presupuesto, no se intenta "recuperar" 
 **Qué es.** `SIGTERM` es la petición educada de terminar (la que mandan `kill`, systemd, Railway); `SIGINT` es Ctrl+C; `SIGKILL` no se puede capturar. Un **manejador de señal no puede hacer `await`**: solo marca un
 `Event` y la corrutina principal hace el trabajo. Cierre ordenado: dejar de aceptar → avisar a cada cliente (`close 1001`) → dar un plazo → cortar a los rezagados.
 
-**Dónde está.** `serve_until_signal` (`server/main.py:103`) y `Listener.shutdown` (`server/adapters/listener.py:97`). Medido: 23 ms con 20 clientes, todos reciben `close 1001`.
+**Dónde está.** `serve_until_signal` (`server/main.py:105`) y `Listener.shutdown` (`server/adapters/listener.py:97`). Medido: 23 ms con 20 clientes, todos reciben `close 1001`.
 **Qué buscar.** `man 7 signal`, "graceful shutdown", `loop.add_signal_handler`, "SIGTERM vs SIGKILL".
 
 ### 4.4 Logging síncrono y su riesgo [B]
@@ -378,7 +378,7 @@ en 35 s. El proyecto lo mitiga con `RateLimitFilter.filter` (`server/log_filters
 **Qué es.** El servidor es **la única fuente de verdad**: decide la física, las colisiones y las eliminaciones. El cliente solo envía **intenciones** ("quiero ir a la derecha", "estoy cargando"), nunca posiciones.
 Así un cliente modificado no puede teletransportarse ni correr más: lo máximo que logra es mandar intenciones inválidas, que el codec rechaza.
 
-**Dónde está.** `game_codec` (`server/adapters/codec.py:134`) (solo acepta intenciones validadas), `Disc.set_move` (`server/domain/disc.py:36`) (normaliza la dirección: `dx=1000` no corre más rápido), y el cliente (`syncIntent` (`client/client.js:354`)) envía solo direcciones.
+**Dónde está.** `game_codec` (`server/adapters/codec.py:134`) (solo acepta intenciones validadas), `Disc.set_move` (`server/domain/disc.py:36`) (normaliza la dirección: `dx=1000` no corre más rápido), y el cliente (`syncIntent` (`client/client.js:388`)) envía solo direcciones.
 **Qué buscar.** "authoritative server game architecture", "never trust the client", Gabriel Gambetta "Fast-Paced Multiplayer" (parte I).
 **Te preguntarán.** "¿Qué impide hacer trampa?"
 
@@ -401,7 +401,7 @@ Así un cliente modificado no puede teletransportarse ni correr más: lo máximo
 
 **Qué es.** Los estados llegan a 30 Hz con *jitter*; dibujarlos tal cual se ve a tirones. Se guarda un pequeño historial y se **dibuja ~100 ms en el pasado**, mezclando linealmente los dos estados que rodean ese instante (`lerp`). Se paga un retraso fijo a cambio de movimiento suave.
 
-**Dónde está.** `pushSnapshot` (`client/client.js:109`), `interpolatedDiscs` (`client/client.js:145`), `lerpDiscs` (`client/client.js:133`) y `startsNewRound` (`client/client.js:125`) (los discos *saltan* a su punto de salida: no se mezclan).
+**Dónde está.** `pushSnapshot` (`client/client.js:126`), `interpolatedDiscs` (`client/client.js:162`), `lerpDiscs` (`client/client.js:150`) y `startsNewRound` (`client/client.js:142`) (los discos *saltan* a su punto de salida: no se mezclan).
 **Qué buscar.** "entity interpolation", "Source Multiplayer Networking" (Valve, sección de interpolación), Gambetta "Entity Interpolation".
 
 ### 5.5 Lo que el proyecto **no** hace (y cómo decirlo) [B]
@@ -425,13 +425,13 @@ Un estado pesa ~330 bytes con 8 discos (medido; 456 con 12) y se envía 30 veces
 
 **Qué es.** El **núcleo** (dominio y casos de uso) no depende de la tecnología: define **puertos** (interfaces) y los **adaptadores** (red, JSON, WebSocket) los implementan. Las dependencias apuntan **hacia adentro**: el dominio no sabe que existe `asyncio` ni `socket`, así que se prueba sin red.
 
-**Dónde está.** Capas `server/domain/` (sin red), `server/application/` (`SnapshotObserver` (`server/application/ports.py:52`), `SnapshotEncoder` (`server/application/ports.py:76`)), `server/adapters/` (todo lo de red) y `build` (`server/main.py:71`) (el único sitio que conecta). Una prueba comprueba que el dominio no importa red (`test_dominio_no_importa_red`).
+**Dónde está.** Capas `server/domain/` (sin red), `server/application/` (`SnapshotObserver` (`server/application/ports.py:52`), `SnapshotEncoder` (`server/application/ports.py:76`)), `server/adapters/` (todo lo de red) y `build` (`server/main.py:73`) (el único sitio que conecta). Una prueba comprueba que el dominio no importa red (`test_dominio_no_importa_red`).
 **Qué buscar.** Alistair Cockburn "Hexagonal Architecture" (el artículo original), "ports and adapters", "clean architecture dependency rule".
 **Te preguntarán.** "¿Por qué `GameSession` no sabe qué es un WebSocket?" "¿Qué pasaría si cambias JSON por binario?" (solo cambias `JsonFrameEncoder`).
 
 ### 6.2 Inyección de dependencias e inversión de dependencias [A]
 
-**Qué es.** **Inversión de dependencias** (la D de SOLID): los módulos de alto nivel dependen de abstracciones, no de detalles. **Inyección**: en vez de que una clase cree lo que necesita, se lo **pasan por el constructor**. Aquí todo se arma en un solo lugar (`build` (`server/main.py:71`)) y `Config` se pasa por constructor, no es una variable global.
+**Qué es.** **Inversión de dependencias** (la D de SOLID): los módulos de alto nivel dependen de abstracciones, no de detalles. **Inyección**: en vez de que una clase cree lo que necesita, se lo **pasan por el constructor**. Aquí todo se arma en un solo lugar (`build` (`server/main.py:73`)) y `Config` se pasa por constructor, no es una variable global.
 
 **Qué buscar.** "dependency inversion principle", "dependency injection constructor", "composition root" (así se llama `main.build`).
 
@@ -445,7 +445,7 @@ Un estado pesa ~330 bytes con 8 discos (medido; 456 con 12) y se envía 30 veces
 | **I** — Segregación de interfaces | Interfaces pequeñas | `SnapshotObserver` solo recibe bytes ya codificados; `SnapshotEncoder` solo codifica |
 | **D** — Inversión de dependencias | Depender de abstracciones | `GameSession` depende de los puertos, no de `ClientSession` |
 
-La rúbrica del Proyecto 1 habla de eliminar los bloques `if/switch` masivos con **polimorfismo y registros**. En tu código: el codec (`game_codec` (`server/adapters/codec.py:134`)), los opcodes (`ClientSession.__init__` (`server/adapters/client_session.py:39`)) y los manejadores del cliente (`handlers` (`client/client.js:164`)) son diccionarios, no `if/elif`.
+La rúbrica del Proyecto 1 habla de eliminar los bloques `if/switch` masivos con **polimorfismo y registros**. En tu código: el codec (`game_codec` (`server/adapters/codec.py:134`)), los opcodes (`ClientSession.__init__` (`server/adapters/client_session.py:39`)) y los manejadores del cliente (`handlers` (`client/client.js:181`)) son diccionarios, no `if/elif`.
 **Qué buscar.** Robert C. Martin "SOLID principles", refactoring.guru (explicación con ejemplos de cada uno).
 
 ### 6.4 Los cinco patrones de diseño (GoF) del proyecto [A]
@@ -489,7 +489,7 @@ Un vector 2D `(x, y)` representa posición, velocidad o dirección. **Normalizar
 ### 7.3 *Tunneling* (atravesar objetos) [B]
 
 **Qué es.** La colisión se detecta comparando posiciones **tick a tick**. Si un disco avanza en un tick **más que su radio**, puede pasar "a través" de otro sin que se detecte nunca el solapamiento. Regla del proyecto: `velocidad máxima × dt < radio`. Por eso `Config` **rechaza al arrancar** una configuración que lo permita, y la física recorta toda velocidad a `DASH_MAX_SPEED` (`Physics._cap_speed` (`server/domain/physics.py:89`)).
-**Dónde está.** `Config.__post_init__` (`server/config.py:278`). **Qué buscar.** "tunneling collision detection", "continuous collision detection" (la alternativa más cara).
+**Dónde está.** `Config.__post_init__` (`server/config.py:281`). **Qué buscar.** "tunneling collision detection", "continuous collision detection" (la alternativa más cara).
 
 ### 7.4 Determinismo y paso fijo [B]
 
@@ -525,13 +525,13 @@ La velocidad se multiplica por `exp(-k·dt)` en cada paso: es el decaimiento exp
 
 | Concepto | Qué es | Dónde |
 | --- | --- | --- |
-| **WebSocket API** del navegador | `new WebSocket(url)`, eventos `open`, `message`, `close`; envía `JSON.stringify`; el navegador enmascara las tramas **solo** | `connect` (`client/client.js:273`) |
-| **Canvas 2D** | Dibujar con código (`arc`, `fill`, `stroke`) sobre un lienzo | `draw` (`client/client.js:635`) |
-| **`requestAnimationFrame`** | Llama a tu función al ritmo de la pantalla (~60 Hz) | `frame` (`client/client.js:688`) |
-| **`KeyboardEvent.code`** | Tecla **física** (`KeyW`), independiente de la distribución del teclado | `MOVE_KEYS` (`client/client.js:311`) |
-| **`performance.now()`** | Reloj monotónico del navegador | `pushSnapshot` (`client/client.js:109`) |
-| **Ghosting del teclado** | Muchos teclados no registran ciertas combinaciones de 3 teclas | `CHARGE_CODES` (`client/client.js:319`) (por eso J y K) |
-| **DOM seguro** | `textContent` en lugar de `innerHTML` para texto de otros usuarios (evita XSS) | `renderRooms` (`client/client.js:248`) |
+| **WebSocket API** del navegador | `new WebSocket(url)`, eventos `open`, `message`, `close`; envía `JSON.stringify`; el navegador enmascara las tramas **solo** | `connect` (`client/client.js:305`) |
+| **Canvas 2D** | Dibujar con código (`arc`, `fill`, `stroke`) sobre un lienzo | `draw` (`client/client.js:830`) |
+| **`requestAnimationFrame`** | Llama a tu función al ritmo de la pantalla (~60 Hz) | `frame` (`client/client.js:892`) |
+| **`KeyboardEvent.code`** | Tecla **física** (`KeyW`), independiente de la distribución del teclado | `MOVE_KEYS` (`client/client.js:345`) |
+| **`performance.now()`** | Reloj monotónico del navegador | `pushSnapshot` (`client/client.js:126`) |
+| **Ghosting del teclado** | Muchos teclados no registran ciertas combinaciones de 3 teclas | `CHARGE_CODES` (`client/client.js:353`) (por eso J y K) |
+| **DOM seguro** | `textContent` en lugar de `innerHTML` para texto de otros usuarios (evita XSS) | `renderRooms` (`client/client.js:277`) |
 
 **Qué buscar.** MDN: "WebSocket", "Canvas API", "window.requestAnimationFrame", "KeyboardEvent.code".
 

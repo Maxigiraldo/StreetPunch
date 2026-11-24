@@ -9,7 +9,8 @@ del borde; gana el último en pie. **Lo que se evalúa es el servidor**:
   `asyncio`; el **WebSocket (RFC 6455) está escrito a mano**, sin librerías.
 - Arquitectura **hexagonal**, con un **único escritor** del estado (el tick) y
   sin cerrojos: ver [`docs/arquitectura.md`](docs/arquitectura.md).
-- Cliente: HTML + JavaScript + `canvas`, sin framework ni paso de compilación.
+- Cliente: HTML + CSS + JavaScript + `canvas`, sin framework ni paso de compilación. Estilo neón dibujado con código
+  (sin imágenes), fuente Orbitron (OFL) y sonido; ver `client/`.
 
 Proyecto Final 2, Opción A, IS294 Arquitectura Cliente-Servidor (UTP).
 
@@ -26,6 +27,9 @@ Cada sala admite hasta 8 jugadores y **todos juegan cada ronda**; con la sala
 llena o jugando no se puede entrar. El anfitrión pulsa «Iniciar partida» cuando
 están todos. Controles: flechas o WASD para moverse; Espacio (o J / K) mantenido
 para cargar y soltado para embestir.
+
+Añade `?fps` a la URL (`http://localhost:8080/?fps`) para ver FPS y tiempo de dibujo. El sonido empieza
+tras el primer clic (política del navegador) y tiene un botón para silenciarlo.
 
 Con `Ctrl+C` o `kill -TERM <pid>` el servidor se apaga en orden (close 1001 a
 cada cliente).
@@ -60,7 +64,7 @@ cada cliente).
 | [`docs/modelo-concurrencia.md`](docs/modelo-concurrencia.md) | Por qué asyncio, con números medidos |
 | [`docs/protocolo.md`](docs/protocolo.md) | Mensajes, cierres, `/metrics`, plazos |
 | [`docs/bitacora-ia.md`](docs/bitacora-ia.md) | Errores reales de la IA, con antes y después |
-| [`docs/demo-race-bug.md`](docs/demo-race-bug.md) | La versión MALA a propósito (rama `demo/race-bug`) |
+| [`docs/demo-race-bug.md`](docs/demo-race-bug.md) | La versión MALA a propósito: rama `demo/race-bug` (etiqueta `demo-race-bug-v2`); está en el remoto: `git checkout demo/race-bug` |
 | [`docs/guion-demo.md`](docs/guion-demo.md) | Guion de la demo y preguntas de la defensa |
 
 ## Estructura
@@ -71,7 +75,8 @@ server/application/  el tick (GameSession), puertos y políticas de envío
 server/adapters/     listener, saludo HTTP, WebSocket, codec, ClientSession
 server/main.py       único lugar que arma los objetos y registra las señales
 server/config.py     todos los valores numéricos, cada uno con su porqué
-client/              HTML + JS + canvas
+client/              index.html · style.css · client.js (lógica) · neon.js (dibujo) · audio.js · fuente y audio
+                     (orígenes y licencias en client/CREDITS.txt; fuente en client/OFL.txt)
 tests/  tools/  docs/
 ```
 
